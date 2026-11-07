@@ -16,7 +16,7 @@ jobs:
   build-apk:
     name: Build VideoGrab APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -46,18 +46,36 @@ jobs:
           FLUTTER_SDK="$(dirname "$(dirname "$(command -v flutter)")")"
           echo "flutter.sdk=$FLUTTER_SDK" > android/local.properties
           echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> android/local.properties
-          cat android/local.properties
 
-      - name: Build release APK (per ABI)
-        run: flutter build apk --release --split-per-abi
-
-      - name: Build release APK (universal, arm + arm64)
-        run: flutter build apk --release --target-platform android-arm,android-arm64
-
-      - name: Collect APKs
+      # ---------------------------------------------------------------- LITE
+      # ~25 MB: no ffmpeg natives (single-file formats, no merging).
+      - name: Build LITE APK (arm64)
         run: |
+          set -e
+          sed -i '/videograb.withFfmpeg/d' android/gradle.properties
+          echo "videograb.withFfmpeg=false" >> android/gradle.properties
+          rm -rf build/app/outputs
+          flutter build apk --release --target-platform android-arm64
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/*.apk dist/
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-arm64-v8a.apk
+
+      - name: Build LITE APK (armv7 / old phones)
+        run: |
+          set -e
+          rm -rf build/app/outputs
+          flutter build apk --release --target-platform android-arm
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-armeabi-v7a.apk
+
+      # ---------------------------------------------------------------- FULL
+      # ~58 MB: bundled ffmpeg (best-video + best-audio merging, audio->m4a).
+      - name: Build FULL APK (arm64 + ffmpeg)
+        run: |
+          set -e
+          sed -i '/videograb.withFfmpeg/d' android/gradle.properties
+          echo "videograb.withFfmpeg=true" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
+          flutter build apk --release --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-full-arm64-v8a.apk
           ls -lh dist
 
       - name: Upload APK artifacts
@@ -66,11 +84,27 @@ jobs:
           name: videograb-apk
           path: dist/*.apk
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
 
-      - name: Attach APKs to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Direct download buttons for phones (Releases page).
+      - name: Publish APKs to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: latest
+          name: VideoGrab - latest APK
+          make_latest: true
+          body: |
+            ## VideoGrab APK
+
+            | File | Size | Kab chunein |
+            | --- | --- | --- |
+            | `VideoGrab-full-arm64-v8a.apk` | ~58 MB | **Recommended** - har quality (merge + audio conversion) |
+            | `VideoGrab-lite-arm64-v8a.apk` | ~25 MB | Chhoti size, single-file formats (720p tak) |
+            | `VideoGrab-lite-armeabi-v7a.apk` | ~22 MB | Purane 32-bit phones |
+
+            Install: APK download karein -> "Unknown sources" allow karein -> install.
+
+            Pehli launch par engine setup hota hai (10-20s). Extractor tootne par
+            Settings -> Update engine.
           files: dist/*.apk
-          generate_release_notes: true
+          fail_on_unmatched_files: true

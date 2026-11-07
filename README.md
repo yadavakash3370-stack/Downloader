@@ -28,21 +28,42 @@ koi server, koi login, koi watermark nahi.
 | Library | Downloaded videos list, play, save copy, delete |
 | Settings | Engine version + update, save-copy toggle, how-to, about |
 
-## APK build (GitHub Actions)
+## APK download
 
-`.github/workflows/build-apk.yml` har push (aur manual dispatch) par APK build karta hai:
+Har successful build par APK **GitHub Release** me chala jata hai (direct download button):
 
-1. GitHub repo → **Actions** tab → **Build APK** → latest run.
-2. **Artifacts** me se `videograb-apk` download karo:
-   - `app-arm64-v8a-release.apk` — modern phones (recommended)
-   - `app-armeabi-v7a-release.apk` — purane 32-bit phones
-   - `app-x86_64-release.apk` — emulators
-   - `app-release.apk` — universal (arm + arm64)
-3. Phone me install karo (unknown sources allow karna padega).
+**https://github.com/yadavakash3370-stack/Downloader/releases/latest**
 
-`v*` tag push karne par APK GitHub Release me bhi attach ho jate hain.
+| APK | Size | Kab chunein |
+| --- | --- | --- |
+| `VideoGrab-full-arm64-v8a.apk` | ~58 MB | **Recommended** — ffmpeg bundled: best video + best audio merge, audio → m4a, har quality |
+| `VideoGrab-lite-arm64-v8a.apk` | ~25 MB | Chhoti size chahiye — single-file formats (720p tak), no merge |
+| `VideoGrab-lite-armeabi-v7a.apk` | ~22 MB | Purane 32-bit phones |
 
-Build stack: Flutter 3.29.3 · Dart 3 · AGP 8.7.3 · Kotlin 2.1.0 · Gradle 8.12 · Java 17 ·
+Phone par: APK tap → "Unknown sources" allow → install.
+(Zyada purana process: Actions → run → Artifacts, wahan bhi milte hain.)
+
+### Full vs Lite
+
+| Feature | Full | Lite |
+| --- | --- | --- |
+| 1080p/4K (separate video+audio merge) | Yes | — |
+| 720p tak single-file | Yes | Yes |
+| Audio-only extract to m4a | Yes | native audio file (m4a/webm) |
+| APK size | ~58 MB | ~25 MB |
+
+App build ke waqt hi detect kar leta hai ki ffmpeg hai ya nahi, isliye dono
+variants same codebase se bante hain. Settings me "Full build / Lite build" dikh jata hai.
+
+### Build pipeline
+
+`.github/workflows/build-apk.yml` har push (aur manual dispatch) par:
+
+1. **Lite** arm64 + armv7 build (`videograb.withFfmpeg=false` → ffmpeg natives skip)
+2. **Full** arm64 build (ffmpeg included)
+3. Artifacts upload + **Release `latest` update** with the three APKs
+
+Stack: Flutter 3.29.3 · Dart 3 · AGP 8.7.3 · Kotlin 2.1.0 · Gradle 8.12 · Java 17 ·
 minSdk 24 (Android 7.0+) · targetSdk 35.
 
 ## Local build

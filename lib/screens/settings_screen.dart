@@ -130,16 +130,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          ValueListenableBuilder<String>(
-            valueListenable: SettingsStore.engineVersion,
-            builder: (BuildContext context, String version, Widget? child) {
-              return Text(
-                version.isEmpty
-                    ? 'yt-dlp version: —'
-                    : 'yt-dlp version: $version',
-                style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
-              );
-            },
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: ValueListenableBuilder<String>(
+                  valueListenable: SettingsStore.engineVersion,
+                  builder: (BuildContext context, String version, Widget? child) {
+                    return Text(
+                      version.isEmpty
+                          ? 'yt-dlp version: —'
+                          : 'yt-dlp version: $version',
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.muted,
+                      ),
+                    );
+                  },
+                ),
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: SettingsStore.hasFfmpeg,
+                builder: (BuildContext context, bool full, Widget? child) {
+                  return AppPill(
+                    label: full ? 'Full build' : 'Lite build',
+                    color: full ? AppColors.secondary : AppColors.muted,
+                  );
+                },
+              ),
+            ],
           ),
           const SizedBox(height: 6),
           const Text(

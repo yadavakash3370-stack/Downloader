@@ -63,7 +63,13 @@ flutter {
     source = "../.."
 }
 
+// The "lite" APK is built with -Pvideograb.withFfmpeg=false (see gradle.properties)
+// which drops the ~35 MB ffmpeg natives. The app detects it at runtime.
+def withFfmpeg = (project.findProperty("videograb.withFfmpeg") ?: "true").toString() != "false"
+
 dependencies {
     implementation "io.github.junkfood02.youtubedl-android:library:0.18.1"
-    implementation "io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1"
+    if (withFfmpeg) {
+        implementation "io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1"
+    }
 }

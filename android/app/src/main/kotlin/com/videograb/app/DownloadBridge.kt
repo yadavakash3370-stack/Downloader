@@ -7,7 +7,6 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import io.flutter.plugin.common.MethodCall
@@ -34,6 +33,10 @@ class DownloadBridge(
 
     @Volatile
     private var engineReady = false
+
+    /** False in the "lite" build, which ships without the ffmpeg natives. */
+    @Volatile
+    private var ffmpegReady = false
 
     // ------------------------------------------------------------- plumbing
 
@@ -81,12 +84,23 @@ class DownloadBridge(
     private fun ensureEngine() {
         if (engineReady) return
         YoutubeDL.getInstance().init(context)
-        try {
-            FFmpeg.getInstance().init(context)
-        } catch (e: Throwable) {
-            // ffmpeg is optional; merging simply falls back
-        }
+        ffmpegReady = initFfmpegIfPresent()
         engineReady = true
+    }
+
+    /**
+     * The lite build has no ffmpeg natives, so the class is only touched through
+     * reflection. Full build: merging and audio conversion are available.
+     */
+    private fun initFfmpegIfPresent(): Boolean {
+        return try {
+            val clazz = Class.forName("com.yausername.ffmpeg.FFmpeg")
+            val instance = clazz.getMethod("getInstance").invoke(null)
+            clazz.getMethod("init", Context::class.java).invoke(instance, context)
+            true
+        } catch (e: Throwable) {
+            false
+        }
     }
 
     // --------------------------------------------------------------- routes
@@ -133,7 +147,8 @@ class DownloadBridge(
                     bag(
                         "ok" to true,
                         "version" to (version ?: "bundled"),
-                        "sdkInt" to Build.VERSION.SDK_INT
+                        "sdkInt" to Build.VERSION.SDK_INT,
+                        "hasFfmpeg" to ffmpegReady
                     )
                 )
             } catch (error: Throwable) {
@@ -162,7 +177,8 @@ class DownloadBridge(
                 "ok" to true,
                 "ready" to engineReady,
                 "version" to version,
-                "sdkInt" to Build.VERSION.SDK_INT
+                "sdkInt" to Build.VERSION.SDK_INT,
+                "hasFfmpeg" to ffmpegReady
             )
         )
     }
@@ -182,6 +198,7 @@ class DownloadBridge(
                 val info = YoutubeDL.getInstance().getInfo(request)
 
                 val heights = ArrayList<Int>()
+                val combinedHeights = ArrayList<Int>()
                 val sizes = HashMap<String, Long>()
                 var audioOnly = false
 
@@ -200,10 +217,16 @@ class DownloadBridge(
                                 if (size > previous) sizes[key] = size
                             }
                         }
+                        if (vcodec != "none" && acodec != "none" && format.height > 0 &&
+                            !combinedHeights.contains(format.height)
+                        ) {
+                            combinedHeights.add(format.height)
+                        }
                         if (vcodec == "none" && acodec != "none") audioOnly = true
                     }
                 }
                 heights.sortDescending()
+                combinedHeights.sortDescending()
 
                 var thumbnail = info.thumbnail
                 if (thumbnail.isNullOrBlank()) {
@@ -224,8 +247,10 @@ class DownloadBridge(
                         "extractor" to (info.extractorKey ?: info.extractor ?: ""),
                         "duration" to info.duration,
                         "heights" to heights,
+                        "combinedHeights" to combinedHeights,
                         "sizes" to sizes,
-                        "audioOnly" to audioOnly
+                        "audioOnly" to audioOnly,
+                        "hasFfmpeg" to ffmpegReady
                     )
                 )
             } catch (error: Throwable) {
@@ -274,11 +299,13 @@ class DownloadBridge(
 
                 if (audioOnly) {
                     request.addOption("-f", "ba/b")
-                    request.addOption("-x")
-                    request.addOption("--audio-format", "m4a")
+                    if (ffmpegReady) {
+                        request.addOption("-x")
+                        request.addOption("--audio-format", "m4a")
+                    }
                 } else {
                     request.addOption("-f", format)
-                    request.addOption("--merge-output-format", "mp4")
+                    if (ffmpegReady) request.addOption("--merge-output-format", "mp4")
                 }
 
                 emit("stage", bag("jobId" to jobId, "message" to "Preparing"))
@@ -364,11 +391,18 @@ class DownloadBridge(
         pool.execute {
             var direct: String? = null
             var lastError = ""
-            val selectors = listOf(
-                "b[protocol^=http][ext=mp4]/b[protocol^=http]/b",
-                "b",
-                "bv*+ba/b"
-            )
+            val selectors = if (ffmpegReady) {
+                listOf(
+                    "b[protocol^=http][ext=mp4]/b[protocol^=http]/b",
+                    "b",
+                    "bv*+ba/b"
+                )
+            } else {
+                listOf(
+                    "b[protocol^=http][ext=mp4]/b[protocol^=http]/b",
+                    "b"
+                )
+            }
             for (selector in selectors) {
                 try {
                     ensureEngine()

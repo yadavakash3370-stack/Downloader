@@ -546,6 +546,29 @@ class _HomeScreenState extends State<HomeScreen> {
                       });
                     }),
                   ),
+                  if (info.lite) ...<Widget>[
+                    const SizedBox(height: 12),
+                    Row(
+                      children: <Widget>[
+                        const AppIcon(
+                          'info',
+                          size: 13,
+                          color: AppColors.warning,
+                        ),
+                        const SizedBox(width: 7),
+                        const Expanded(
+                          child: Text(
+                            'Lite build: single-file formats (720p tak). Full APK me zyada quality milegi.',
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: AppColors.muted,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   Row(
                     children: <Widget>[

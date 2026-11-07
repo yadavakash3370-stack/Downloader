@@ -7,7 +7,7 @@ class QualityOption {
     this.bytes = 0,
   });
 
-  /// Text shown on the chip, e.g. "720p HD".
+  /// Text shown on the chip, e.g. "720p".
   final String label;
 
   /// yt-dlp `-f` selector.
@@ -26,6 +26,7 @@ class MediaInfo {
     required this.extractor,
     required this.duration,
     required this.options,
+    this.lite = false,
   });
 
   final String url;
@@ -36,9 +37,16 @@ class MediaInfo {
   final int duration;
   final List<QualityOption> options;
 
+  /// True when the installed APK is the "lite" build (no ffmpeg natives), so
+  /// only single-file formats are offered.
+  final bool lite;
+
   factory MediaInfo.fromMap(Map<String, dynamic> map) {
+    final bool hasFfmpeg = map['hasFfmpeg'] == true;
+    final Object? rawHeights =
+        hasFfmpeg ? map['heights'] : map['combinedHeights'];
+
     final List<int> heights = <int>[];
-    final Object? rawHeights = map['heights'];
     if (rawHeights is List) {
       for (final Object? item in rawHeights) {
         if (item is num) heights.add(item.toInt());
@@ -54,7 +62,10 @@ class MediaInfo {
     }
 
     final List<QualityOption> options = <QualityOption>[
-      QualityOption(label: 'Best', format: 'bv*+ba/b'),
+      QualityOption(
+        label: 'Best',
+        format: hasFfmpeg ? 'bv*+ba/b' : 'b[ext=mp4]/b',
+      ),
     ];
 
     for (final int height in heights) {
@@ -62,8 +73,9 @@ class MediaInfo {
       options.add(
         QualityOption(
           label: '${height}p',
-          format:
-              'bv*[height<=$height][ext=mp4]+ba[ext=m4a]/bv*[height<=$height]+ba/b[height<=$height]/b',
+          format: hasFfmpeg
+              ? 'bv*[height<=$height][ext=mp4]+ba[ext=m4a]/bv*[height<=$height]+ba/b[height<=$height]/b'
+              : 'b[height<=$height][ext=mp4]/b[height<=$height]/b',
           height: height,
           bytes: sizes['$height'] ?? 0,
         ),
@@ -72,11 +84,7 @@ class MediaInfo {
 
     if (map['audioOnly'] == true || heights.isEmpty) {
       options.add(
-        const QualityOption(
-          label: 'Audio',
-          format: 'ba/b',
-          audioOnly: true,
-        ),
+        const QualityOption(label: 'Audio', format: 'ba/b', audioOnly: true),
       );
     }
 
@@ -88,6 +96,7 @@ class MediaInfo {
       extractor: (map['extractor'] ?? '') as String,
       duration: map['duration'] is num ? (map['duration'] as num).toInt() : 0,
       options: options,
+      lite: !hasFfmpeg,
     );
   }
 }

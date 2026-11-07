@@ -14,6 +14,9 @@ class SettingsStore {
   static final ValueNotifier<String> engineError = ValueNotifier<String>('');
   static final ValueNotifier<int> sdkInt = ValueNotifier<int>(0);
 
+  /// True when the installed APK bundles the ffmpeg natives (full build).
+  static final ValueNotifier<bool> hasFfmpeg = ValueNotifier<bool>(true);
+
   static Future<void> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     saveCopy.value = prefs.getBool(_keySaveCopy) ?? true;
@@ -34,12 +37,18 @@ class SettingsStore {
       engineReady.value = true;
       engineError.value = '';
       engineVersion.value = (result['version'] ?? '') as String;
+      if (result['hasFfmpeg'] is bool) {
+        hasFfmpeg.value = result['hasFfmpeg'] as bool;
+      }
     } else {
       engineReady.value = false;
       engineError.value = (result['error'] ?? 'Engine init failed') as String;
     }
 
     final Map<String, dynamic> info = await Engine.info();
+    if (info['hasFfmpeg'] is bool) {
+      hasFfmpeg.value = info['hasFfmpeg'] as bool;
+    }
     if (info['ok'] == true && info['sdkInt'] is num) {
       sdkInt.value = (info['sdkInt'] as num).toInt();
     } else if (result['sdkInt'] is num) {
