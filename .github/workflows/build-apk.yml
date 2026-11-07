@@ -102,9 +102,9 @@ jobs:
 
             | File | Size | Kab chunein |
             | --- | --- | --- |
-            | `VideoGrab-full-arm64-v8a.apk` | ~58 MB | **Recommended** - har quality (merge + audio conversion) |
-            | `VideoGrab-lite-arm64-v8a.apk` | ~25 MB | Chhoti size, single-file formats (720p tak) |
-            | `VideoGrab-lite-armeabi-v7a.apk` | ~22 MB | Purane 32-bit phones |
+            | `VideoGrab-full-arm64-v8a.apk` | ~65 MB | **Recommended** - har quality (merge + audio conversion) |
+            | `VideoGrab-lite-arm64-v8a.apk` | ~30 MB | Chhoti size, single-file formats (720p tak) |
+            | `VideoGrab-lite-armeabi-v7a.apk` | ~29 MB | Purane 32-bit phones |
 
             Install: APK download karein -> "Unknown sources" allow karein -> install.
 

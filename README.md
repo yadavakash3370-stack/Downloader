@@ -36,9 +36,9 @@ Har successful build par APK **GitHub Release** me chala jata hai (direct downlo
 
 | APK | Size | Kab chunein |
 | --- | --- | --- |
-| `VideoGrab-full-arm64-v8a.apk` | ~58 MB | **Recommended** — ffmpeg bundled: best video + best audio merge, audio → m4a, har quality |
-| `VideoGrab-lite-arm64-v8a.apk` | ~25 MB | Chhoti size chahiye — single-file formats (720p tak), no merge |
-| `VideoGrab-lite-armeabi-v7a.apk` | ~22 MB | Purane 32-bit phones |
+| `VideoGrab-full-arm64-v8a.apk` | ~65 MB | **Recommended** — ffmpeg bundled: best video + best audio merge, audio → m4a, har quality |
+| `VideoGrab-lite-arm64-v8a.apk` | ~30 MB | Chhoti size chahiye — single-file formats (720p tak), no merge |
+| `VideoGrab-lite-armeabi-v7a.apk` | ~29 MB | Purane 32-bit phones |
 
 Phone par: APK tap → "Unknown sources" allow → install.
 (Zyada purana process: Actions → run → Artifacts, wahan bhi milte hain.)
@@ -50,7 +50,7 @@ Phone par: APK tap → "Unknown sources" allow → install.
 | 1080p/4K (separate video+audio merge) | Yes | — |
 | 720p tak single-file | Yes | Yes |
 | Audio-only extract to m4a | Yes | native audio file (m4a/webm) |
-| APK size | ~58 MB | ~25 MB |
+| APK size | ~65 MB | ~30 MB |
 
 App build ke waqt hi detect kar leta hai ki ffmpeg hai ya nahi, isliye dono
 variants same codebase se bante hain. Settings me "Full build / Lite build" dikh jata hai.
