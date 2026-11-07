@@ -52,27 +52,31 @@ jobs:
       - name: Build LITE APK (arm64)
         run: |
           set -e
-          sed -i '/videograb.withFfmpeg/d' android/gradle.properties
-          echo "videograb.withFfmpeg=false" >> android/gradle.properties
-          rm -rf build/app/outputs
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=false\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
           flutter build apk --release --target-platform android-arm64
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-arm64-v8a.apk
+          ls -lh dist
 
       - name: Build LITE APK (armv7 / old phones)
         run: |
           set -e
-          rm -rf build/app/outputs
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=false\nvideograb.abi=armeabi-v7a\n" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
           flutter build apk --release --target-platform android-arm
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-armeabi-v7a.apk
+          ls -lh dist
 
       # ---------------------------------------------------------------- FULL
       # ~58 MB: bundled ffmpeg (best-video + best-audio merging, audio->m4a).
       - name: Build FULL APK (arm64 + ffmpeg)
         run: |
           set -e
-          sed -i '/videograb.withFfmpeg/d' android/gradle.properties
-          echo "videograb.withFfmpeg=true" >> android/gradle.properties
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=true\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
           flutter build apk --release --target-platform android-arm64
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-full-arm64-v8a.apk

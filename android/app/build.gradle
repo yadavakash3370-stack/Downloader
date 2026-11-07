@@ -15,6 +15,10 @@ if (localPropertiesFile.exists()) {
 def flutterVersionCode = localProperties.getProperty("flutter.versionCode") ?: "1"
 def flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "1.0.0"
 
+// Which ABI lands inside this APK (the yt-dlp/python/ffmpeg natives are per-ABI,
+// so shipping every ABI would bloat the APK to ~200 MB).
+def targetAbi = (project.findProperty("videograb.abi") ?: "arm64-v8a").toString()
+
 android {
     namespace = "com.videograb.app"
     compileSdk = 35
@@ -34,6 +38,10 @@ android {
         targetSdk = 35
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
+
+        ndk {
+            abiFilters targetAbi
+        }
     }
 
     buildTypes {
