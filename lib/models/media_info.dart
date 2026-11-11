@@ -68,6 +68,9 @@ class MediaInfo {
       });
     }
 
+    // "Best" = sabse achhi quality jo har phone par reliably play ho
+    // (h264 + aac -> mp4). "Max" = site ka sabse bada format (AV1/VP9 bhi,
+    // container apne aap mkv/webm ban jata hai).
     final List<QualityOption> options = <QualityOption>[
       QualityOption(
         label: 'Best',
@@ -77,12 +80,21 @@ class MediaInfo {
       ),
     ];
 
+    if (hasFfmpeg) {
+      options.add(const QualityOption(label: 'Max', format: 'bv*+ba/b'));
+    }
+
     for (final int height in heights) {
+      // 1080p se upar h264 generally nahi milta - codec restriction hatana
+      // zaroori hai warna "2160p" chunne par bhi 1080p hi download hota.
+      final String fullFormat = height > 1080
+          ? 'bv*[height<=$height]+ba/b[height<=$height]/b'
+          : 'bv*[height<=$height][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=$height][ext=mp4]+ba[ext=m4a]/bv*[height<=$height]+ba/b[height<=$height]/b';
       options.add(
         QualityOption(
           label: '${height}p',
           format: hasFfmpeg
-              ? 'bv*[height<=$height][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=$height][ext=mp4]+ba[ext=m4a]/bv*[height<=$height]+ba/b[height<=$height]/b'
+              ? fullFormat
               : 'b[height<=$height][ext=mp4]/b[height<=$height]/b',
           height: height,
           bytes: sizes['$height'] ?? 0,

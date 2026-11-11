@@ -14,8 +14,9 @@ koi server, koi watermark nahi.
   TikTok / X / Vimeo / Dailymotion / Physics Wallah / direct media pehchan liya jata hai
   (koi network request nahi, analyse se pehle).
 - **1000+ sites** (yt-dlp extractors) + direct MP4 / HLS / DASH links.
-- **Better quality** — full build me best video + best audio merge (1080p/4K tak), codec-compatible
-  container automatically, `Best` default. Lite build me progressive formats.
+- **Better quality** — full build me best video + best audio merge, codec-compatible container
+  automatically (`--merge-output-format mp4` force nahi hota). `Best` (reliable h264/AAC MP4),
+  `Max` (site ka sabse bada format, AV1/VP9 bhi) aur 144p–4K chips. Lite build me progressive formats.
 - **Faster downloads** — parallel fragments (`-N`), chunked HTTP range requests, 64K buffer,
   shorter timeouts. Settings me 1× / 4× / 8× / 16× Turbo choose karo (default 8×).
 - **PW tab** — `pw.live` official site app ke andar WebView me khulti hai; OTP login wahi hota hai,
