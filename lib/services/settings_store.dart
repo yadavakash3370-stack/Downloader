@@ -6,8 +6,12 @@ import 'engine.dart';
 /// App level settings + engine status.
 class SettingsStore {
   static const String _keySaveCopy = 'videograb_save_copy_v1';
+  static const String _keyConcurrency = 'videograb_concurrency_v1';
 
   static final ValueNotifier<bool> saveCopy = ValueNotifier<bool>(true);
+
+  /// Parallel fragments / HTTP connections used by yt-dlp (speed control).
+  static final ValueNotifier<int> concurrency = ValueNotifier<int>(8);
   static final ValueNotifier<bool> engineReady = ValueNotifier<bool>(false);
   static final ValueNotifier<bool> engineBooting = ValueNotifier<bool>(true);
   static final ValueNotifier<String> engineVersion = ValueNotifier<String>('');
@@ -20,12 +24,19 @@ class SettingsStore {
   static Future<void> load() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     saveCopy.value = prefs.getBool(_keySaveCopy) ?? true;
+    concurrency.value = (prefs.getInt(_keyConcurrency) ?? 8).clamp(1, 24).toInt();
   }
 
   static Future<void> setSaveCopy(bool value) async {
     saveCopy.value = value;
     final SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_keySaveCopy, value);
+  }
+
+  static Future<void> setConcurrency(int value) async {
+    concurrency.value = value.clamp(1, 24).toInt();
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_keyConcurrency, concurrency.value);
   }
 
   /// Extracts and prepares the bundled python + yt-dlp runtime (first run is slow).

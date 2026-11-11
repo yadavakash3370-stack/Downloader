@@ -8,7 +8,7 @@ class AppIcon extends StatelessWidget {
   const AppIcon(
     this.name, {
     super.key,
-    this.size = 22,
+    this.size = 20,
     this.color = AppColors.text,
   });
 
@@ -32,12 +32,12 @@ class IconBadge extends StatelessWidget {
   const IconBadge(
     this.name, {
     super.key,
-    this.size = 40,
-    this.iconSize = 20,
+    this.size = 38,
+    this.iconSize = 18,
     this.background,
     this.color = AppColors.text,
     this.gradient = false,
-    this.radius = 14,
+    this.radius = 11,
   });
 
   final String name;
@@ -65,13 +65,13 @@ class IconBadge extends StatelessWidget {
       child: AppIcon(
         name,
         size: iconSize,
-        color: gradient ? const Color(0xFF08080F) : color,
+        color: gradient ? Colors.white : color,
       ),
     );
   }
 }
 
-/// Primary action button with a gradient fill.
+/// Primary action button.
 class GradientButton extends StatelessWidget {
   const GradientButton({
     required this.label,
@@ -79,7 +79,7 @@ class GradientButton extends StatelessWidget {
     super.key,
     this.icon,
     this.expanded = true,
-    this.height = 52,
+    this.height = 48,
     this.busy = false,
   });
 
@@ -93,82 +93,73 @@ class GradientButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bool disabled = onPressed == null || busy;
-    final Widget content = Container(
+    return SizedBox(
       height: height,
-      padding: const EdgeInsets.symmetric(horizontal: 22),
-      decoration: BoxDecoration(
-        gradient: disabled
-            ? const LinearGradient(
-                colors: <Color>[Color(0xFF2A2A3E), Color(0xFF2A2A3E)],
-              )
-            : AppColors.gradient,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: disabled
-            ? const <BoxShadow>[]
-            : <BoxShadow>[
-                BoxShadow(
-                  color: AppColors.primary.withOpacity(0.32),
-                  blurRadius: 22,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-      ),
-      alignment: Alignment.center,
-      child: busy
-          ? const SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2.2,
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF08080F)),
+      width: expanded ? double.infinity : null,
+      child: Material(
+        color: disabled ? AppColors.surfaceAlt : AppColors.primary,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: disabled ? null : onPressed,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: disabled ? AppColors.stroke : Colors.transparent,
               ),
-            )
-          : Row(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                if (icon != null) ...<Widget>[
-                  AppIcon(
-                    icon!,
-                    size: 18,
-                    color: disabled ? AppColors.muted : const Color(0xFF08080F),
-                  ),
-                  const SizedBox(width: 10),
-                ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: disabled ? AppColors.muted : const Color(0xFF08080F),
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                    letterSpacing: 0.2,
-                  ),
-                ),
-              ],
             ),
-    );
-
-    final Widget button = Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: disabled ? null : onPressed,
-        child: content,
+            alignment: Alignment.center,
+            child: busy
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      if (icon != null) ...<Widget>[
+                        AppIcon(
+                          icon!,
+                          size: 16,
+                          color: disabled ? AppColors.muted : Colors.white,
+                        ),
+                        const SizedBox(width: 8),
+                      ],
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: disabled ? AppColors.muted : Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
       ),
     );
-
-    return expanded ? SizedBox(width: double.infinity, child: button) : button;
   }
 }
 
-/// Secondary outlined button used next to the gradient one.
+/// Secondary outlined button.
 class AppOutlineButton extends StatelessWidget {
   const AppOutlineButton({
     required this.label,
     required this.onPressed,
     super.key,
     this.icon,
-    this.height = 52,
+    this.height = 48,
     this.busy = false,
   });
 
@@ -184,36 +175,40 @@ class AppOutlineButton extends StatelessWidget {
       height: height,
       child: Material(
         color: AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(12),
         child: InkWell(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(12),
           onTap: busy ? null : onPressed,
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18),
+            padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.stroke),
             ),
             alignment: Alignment.center,
             child: busy
                 ? const SizedBox(
-                    width: 18,
-                    height: 18,
+                    width: 16,
+                    height: 16,
                     child: CircularProgressIndicator(strokeWidth: 2.2),
                   )
                 : Row(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
                       if (icon != null) ...<Widget>[
-                        AppIcon(icon!, size: 17, color: AppColors.secondary),
-                        const SizedBox(width: 9),
+                        AppIcon(icon!, size: 15, color: AppColors.secondary),
+                        const SizedBox(width: 7),
                       ],
-                      Text(
-                        label,
-                        style: const TextStyle(
-                          color: AppColors.text,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 14,
+                      Flexible(
+                        child: Text(
+                          label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.text,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                     ],

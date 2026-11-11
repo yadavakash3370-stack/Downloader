@@ -6,8 +6,10 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../models/download_item.dart';
 import '../models/media_info.dart';
+import '../services/app_links.dart';
 import '../services/engine.dart';
 import '../services/library_store.dart';
+import '../services/platform_detector.dart';
 import '../services/settings_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
@@ -44,16 +46,18 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _error;
   MediaInfo? _info;
   int _quality = 0;
+  Map<String, String> _headers = const <String, String>{};
 
-  static const List<List<String>> _platforms = <List<String>>[
-    <String>['brand-youtube', 'YouTube', '0xFFFF0033'],
-    <String>['brand-instagram', 'Instagram', '0xFFE1306C'],
-    <String>['brand-facebook', 'Facebook', '0xFF1877F2'],
-    <String>['brand-tiktok', 'TikTok', '0xFFFFFFFF'],
-    <String>['brand-x', 'X', '0xFFFFFFFF'],
-    <String>['brand-vimeo', 'Vimeo', '0xFF1AB7EA'],
-    <String>['brand-dailymotion', 'Dailymotion', '0xFF00AAFF'],
-    <String>['globe', '1000+ sites', '0xFF22D3EE'],
+  static const List<PlatformInfo> _platforms = <PlatformInfo>[
+    PlatformDetector.youtube,
+    PlatformDetector.instagram,
+    PlatformDetector.facebook,
+    PlatformDetector.tiktok,
+    PlatformDetector.x,
+    PlatformDetector.vimeo,
+    PlatformDetector.dailymotion,
+    PlatformDetector.pw,
+    PlatformDetector.other,
   ];
 
   @override
@@ -61,12 +65,14 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _subscription = Engine.events.listen(_onEngineEvent);
     _controller.addListener(_onUrlChanged);
+    AppLinks.pending.addListener(_onPendingLink);
   }
 
   @override
   void dispose() {
     _subscription?.cancel();
     _controller.removeListener(_onUrlChanged);
+    AppLinks.pending.removeListener(_onPendingLink);
     _controller.dispose();
     super.dispose();
   }
@@ -75,11 +81,28 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
+  /// PW tab ne link bheja hai -> turant analyze karo.
+  void _onPendingLink() {
+    final PendingLink? link = AppLinks.take();
+    if (link == null || !mounted) return;
+    _controller.text = link.url;
+    _headers = link.headers;
+    setState(() {
+      _info = null;
+      _error = null;
+      _quality = 0;
+    });
+    Future<void>.microtask(_analyze);
+  }
+
+  PlatformInfo? get _detected => PlatformDetector.detect(_controller.text);
+
   // ---------------------------------------------------------------- engine
 
   void _onEngineEvent(EngineEvent event) {
     if (!mounted) return;
-    final int index = _jobs.indexWhere((_ActiveJob job) => job.id == event.jobId);
+    final int index =
+        _jobs.indexWhere((_ActiveJob job) => job.id == event.jobId);
     if (index < 0) return;
     final _ActiveJob job = _jobs[index];
 
@@ -154,7 +177,11 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final RegExpMatch? match = RegExp(r'https?://[^\s]+').firstMatch(text);
     _controller.text = match?.group(0) ?? text;
-    setState(() {});
+    _headers = const <String, String>{};
+    setState(() {
+      _info = null;
+      _error = null;
+    });
   }
 
   Future<void> _analyze() async {
@@ -179,7 +206,8 @@ class _HomeScreenState extends State<HomeScreen> {
       await SettingsStore.bootEngine();
     }
 
-    final Map<String, dynamic> result = await Engine.probe(url);
+    final Map<String, dynamic> result =
+        await Engine.probe(url, headers: _headers);
     if (!mounted) return;
 
     if (result['ok'] == true) {
@@ -197,7 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _download() async {
     final MediaInfo? info = _info;
-    if (info == null) return;
+    if (info == null || _quality >= info.options.length) return;
     final QualityOption option = info.options[_quality];
     final String jobId = DateTime.now().microsecondsSinceEpoch.toString();
 
@@ -215,14 +243,16 @@ class _HomeScreenState extends State<HomeScreen> {
       audioOnly: option.audioOnly,
       alsoSave: SettingsStore.saveCopy.value,
       title: info.title,
+      concurrency: SettingsStore.concurrency.value,
+      headers: _headers,
     );
 
     if (!mounted) return;
     if (result['ok'] != true) {
-      final String message = (result['error'] ?? 'Download start nahi hua') as String;
-      final int index = _jobs.indexWhere((_ActiveJob job) => job.id == jobId);
-      // The 'failed' event already updates the card - only handle the case
-      // where the job never started (invalid url, engine error, ...).
+      final String message =
+          (result['error'] ?? 'Download start nahi hua') as String;
+      final int index =
+          _jobs.indexWhere((_ActiveJob job) => job.id == jobId);
       if (index >= 0 && !_jobs[index].finished) {
         setState(() {
           _jobs[index]
@@ -239,7 +269,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final MediaInfo? info = _info;
     if (info == null) return;
     setState(() => _resolvingStream = true);
-    final Map<String, dynamic> result = await Engine.streamUrl(info.url);
+    final Map<String, dynamic> result =
+        await Engine.streamUrl(info.url, headers: _headers);
     if (!mounted) return;
     setState(() => _resolvingStream = false);
 
@@ -270,30 +301,32 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(18, 10, 18, 28),
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 28),
       children: <Widget>[
         _header(),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
         _urlCard(),
         if (_error != null) ...<Widget>[
           const SizedBox(height: 12),
           _errorCard(_error!),
         ],
         if (_analyzing) ...<Widget>[
-          const SizedBox(height: 14),
-          const _AnalyzingCard(),
+          const SizedBox(height: 12),
+          _analyzingCard(),
         ],
         if (_info != null) ...<Widget>[
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
           _resultCard(_info!),
         ],
         if (_jobs.isNotEmpty) ...<Widget>[
           const SizedBox(height: 22),
-          _sectionTitle('Downloads in progress', 'bolt'),
+          _sectionTitle('Downloads', 'bolt'),
           const SizedBox(height: 10),
           ..._jobs.map(_jobCard),
         ],
-        const SizedBox(height: 24),
+        const SizedBox(height: 22),
+        _engineCard(),
+        const SizedBox(height: 22),
         _sectionTitle('Supported platforms', 'globe'),
         const SizedBox(height: 10),
         _platformGrid(),
@@ -305,30 +338,26 @@ class _HomeScreenState extends State<HomeScreen> {
     return Row(
       children: <Widget>[
         ClipRRect(
-          borderRadius: BorderRadius.circular(15),
-          child: SvgPicture.asset('assets/icons/logo.svg', width: 46, height: 46),
+          borderRadius: BorderRadius.circular(13),
+          child: SvgPicture.asset('assets/icons/logo.svg', width: 42, height: 42),
         ),
         const SizedBox(width: 12),
-        Expanded(
+        const Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              const Text(
+              Text(
                 'VideoGrab',
                 style: TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.w800,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
                   letterSpacing: 0.2,
                 ),
               ),
-              const SizedBox(height: 2),
+              SizedBox(height: 3),
               Text(
                 'Download • Play • Offline',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: AppColors.muted,
-                  letterSpacing: 0.4,
-                ),
+                style: TextStyle(fontSize: 11, color: AppColors.muted),
               ),
             ],
           ),
@@ -340,8 +369,8 @@ class _HomeScreenState extends State<HomeScreen> {
               label: ready ? 'Ready' : 'Starting',
               color: ready ? AppColors.success : AppColors.warning,
               icon: Container(
-                width: 7,
-                height: 7,
+                width: 6,
+                height: 6,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: ready ? AppColors.success : AppColors.warning,
@@ -355,27 +384,25 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _urlCard() {
+    final PlatformInfo? platform = _detected;
     return AppCard(
       padding: const EdgeInsets.all(14),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
           Row(
             children: <Widget>[
-              const IconBadge(
-                'link',
-                size: 38,
-                iconSize: 18,
-                color: AppColors.secondary,
-              ),
+              const IconBadge('link', size: 38, iconSize: 18, color: AppColors.secondary),
               const SizedBox(width: 10),
               Expanded(
                 child: TextField(
                   controller: _controller,
                   keyboardType: TextInputType.url,
                   autocorrect: false,
+                  maxLines: 1,
                   textInputAction: TextInputAction.go,
                   onSubmitted: (_) => _analyze(),
-                  style: const TextStyle(fontSize: 13.5, color: AppColors.text),
+                  style: const TextStyle(fontSize: 13, color: AppColors.text),
                   decoration: const InputDecoration(
                     hintText: 'Video link yahan paste karein…',
                     filled: false,
@@ -390,6 +417,7 @@ class _HomeScreenState extends State<HomeScreen> {
               if (_controller.text.isNotEmpty)
                 _miniButton('close', () {
                   _controller.clear();
+                  _headers = const <String, String>{};
                   setState(() {
                     _info = null;
                     _error = null;
@@ -399,6 +427,28 @@ class _HomeScreenState extends State<HomeScreen> {
               _miniButton('paste', _paste, accent: AppColors.secondary),
             ],
           ),
+          if (platform != null) ...<Widget>[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceAlt,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: <Widget>[
+                  PlatformBadge(platform: platform),
+                  const Spacer(),
+                  const AppIcon('bolt', size: 12, color: AppColors.success),
+                  const SizedBox(width: 5),
+                  const Text(
+                    'Instant detect',
+                    style: TextStyle(fontSize: 10, color: AppColors.muted),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           GradientButton(
             label: 'Analyze link',
@@ -414,13 +464,13 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _miniButton(String icon, VoidCallback onTap, {Color? accent}) {
     return Material(
       color: AppColors.surfaceAlt,
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(10),
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(10),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.all(9),
-          child: AppIcon(icon, size: 17, color: accent ?? AppColors.muted),
+          padding: const EdgeInsets.all(8),
+          child: AppIcon(icon, size: 16, color: accent ?? AppColors.muted),
         ),
       ),
     );
@@ -431,22 +481,52 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: AppColors.danger.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.danger.withOpacity(0.35)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.danger.withOpacity(0.32)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
-          const AppIcon('info', size: 18, color: AppColors.danger),
+          const AppIcon('info', size: 17, color: AppColors.danger),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
               message,
-              style: const TextStyle(
-                fontSize: 12.5,
-                height: 1.4,
-                color: AppColors.danger,
-              ),
+              style: const TextStyle(fontSize: 12, height: 1.45, color: AppColors.danger),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _analyzingCard() {
+    final PlatformInfo? platform = _detected;
+    return AppCard(
+      child: Row(
+        children: <Widget>[
+          const SizedBox(
+            width: 17,
+            height: 17,
+            child: CircularProgressIndicator(strokeWidth: 2.2),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Text(
+                  'Formats dhoondh rahe hain…',
+                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  platform == null
+                      ? 'Link analyze ho raha hai'
+                      : '${platform.label} · quality list taiyaar ho rahi hai',
+                  style: const TextStyle(fontSize: 10.5, color: AppColors.muted),
+                ),
+              ],
             ),
           ),
         ],
@@ -455,20 +535,20 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _resultCard(MediaInfo info) {
-    final QualityOption selected = info.options[_quality];
+    final int safeIndex = _quality.clamp(0, info.options.length - 1).toInt();
+    final QualityOption selected = info.options[safeIndex];
+    final PlatformInfo? platform = _detected;
+
     return AppCard(
       padding: EdgeInsets.zero,
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(16),
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             Stack(
               children: <Widget>[
-                AspectRatio(
-                  aspectRatio: 16 / 9,
-                  child: _thumbnail(info.thumbnail),
-                ),
+                AspectRatio(aspectRatio: 16 / 9, child: _thumbnail(info.thumbnail)),
                 Positioned(
                   left: 10,
                   top: 10,
@@ -486,107 +566,92 @@ class _HomeScreenState extends State<HomeScreen> {
                       label: formatDuration(info.duration),
                       color: AppColors.text,
                       background: Colors.black.withOpacity(0.55),
-                      icon: const AppIcon(
-                        'clock',
-                        size: 11,
-                        color: AppColors.text,
-                      ),
+                      icon: const AppIcon('clock', size: 11, color: AppColors.text),
                     ),
                   ),
               ],
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              padding: const EdgeInsets.fromLTRB(14, 13, 14, 14),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   Text(
                     info.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      height: 1.32,
-                    ),
+                    style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w700, height: 1.35),
                   ),
                   if (info.uploader.isNotEmpty) ...<Widget>[
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 4),
                     Text(
                       info.uploader,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.muted,
-                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 11.5, color: AppColors.muted),
                     ),
                   ],
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 13),
                   Row(
                     children: <Widget>[
-                      const AppIcon('film', size: 14, color: AppColors.muted),
+                      if (platform != null) ...<Widget>[
+                        PlatformBadge(platform: platform),
+                        const Spacer(),
+                      ],
+                      const AppIcon('hd', size: 13, color: AppColors.muted),
                       const SizedBox(width: 6),
-                      Text(
-                        'Quality chunein',
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          color: AppColors.muted,
-                          letterSpacing: 0.3,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      const Text(
+                        'Quality',
+                        style: TextStyle(fontSize: 11, color: AppColors.muted, fontWeight: FontWeight.w600),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 9),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 7,
+                    runSpacing: 7,
                     children: List<Widget>.generate(info.options.length, (int i) {
-                      return _qualityChip(info.options[i], i == _quality, () {
+                      return _qualityChip(info.options[i], i == safeIndex, () {
                         setState(() => _quality = i);
                       });
                     }),
                   ),
                   if (info.lite) ...<Widget>[
-                    const SizedBox(height: 12),
-                    Row(
+                    const SizedBox(height: 11),
+                    const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        const AppIcon(
-                          'info',
-                          size: 13,
-                          color: AppColors.warning,
-                        ),
-                        const SizedBox(width: 7),
-                        const Expanded(
+                        AppIcon('info', size: 13, color: AppColors.warning),
+                        SizedBox(width: 7),
+                        Expanded(
                           child: Text(
-                            'Lite build: single-file formats (720p tak). Full APK me zyada quality milegi.',
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              color: AppColors.muted,
-                              height: 1.4,
-                            ),
+                            'Lite APK me single-file formats milte hain (aksar 360–720p). 1080p/4K ke liye Full APK install karein.',
+                            style: TextStyle(fontSize: 10.5, color: AppColors.muted, height: 1.45),
                           ),
                         ),
                       ],
                     ),
                   ],
-                  const SizedBox(height: 18),
+                  const SizedBox(height: 15),
                   Row(
                     children: <Widget>[
                       Expanded(
+                        flex: 3,
                         child: GradientButton(
-                          label: selected.audioOnly
-                              ? 'Download audio'
-                              : 'Download',
+                          label: selected.audioOnly ? 'Download audio' : 'Download',
                           icon: 'download',
                           onPressed: _download,
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      AppOutlineButton(
-                        label: 'Play',
-                        icon: 'play',
-                        busy: _resolvingStream,
-                        onPressed: _resolvingStream ? null : _play,
+                      const SizedBox(width: 9),
+                      Expanded(
+                        flex: 2,
+                        child: AppOutlineButton(
+                          label: 'Play',
+                          icon: 'play',
+                          busy: _resolvingStream,
+                          onPressed: _resolvingStream ? null : _play,
+                        ),
                       ),
                     ],
                   ),
@@ -604,41 +669,36 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),
         decoration: BoxDecoration(
-          gradient: active ? AppColors.gradient : null,
-          color: active ? null : AppColors.surfaceAlt,
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(
-            color: active ? Colors.transparent : AppColors.stroke,
-          ),
+          color: active ? AppColors.primary : AppColors.surfaceAlt,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: active ? AppColors.primary : AppColors.stroke),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             AppIcon(
               option.audioOnly ? 'music' : 'film',
-              size: 13,
-              color: active ? const Color(0xFF08080F) : AppColors.muted,
+              size: 12,
+              color: active ? Colors.white : AppColors.muted,
             ),
-            const SizedBox(width: 7),
+            const SizedBox(width: 6),
             Text(
               option.label,
               style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: active ? const Color(0xFF08080F) : AppColors.text,
+                fontSize: 11.8,
+                fontWeight: FontWeight.w600,
+                color: active ? Colors.white : AppColors.text,
               ),
             ),
             if (option.bytes > 0) ...<Widget>[
-              const SizedBox(width: 6),
+              const SizedBox(width: 5),
               Text(
                 formatBytes(option.bytes),
                 style: TextStyle(
-                  fontSize: 10.5,
-                  color: active
-                      ? const Color(0xFF08080F).withOpacity(0.7)
-                      : AppColors.muted,
+                  fontSize: 10,
+                  color: active ? Colors.white70 : AppColors.muted,
                 ),
               ),
             ],
@@ -653,7 +713,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return Container(
         color: AppColors.surfaceAlt,
         alignment: Alignment.center,
-        child: const AppIcon('film', size: 34, color: AppColors.muted),
+        child: const AppIcon('film', size: 32, color: AppColors.muted),
       );
     }
     return Image.network(
@@ -663,7 +723,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return Container(
           color: AppColors.surfaceAlt,
           alignment: Alignment.center,
-          child: const AppIcon('film', size: 34, color: AppColors.muted),
+          child: const AppIcon('film', size: 32, color: AppColors.muted),
         );
       },
       loadingBuilder: (
@@ -676,8 +736,8 @@ class _HomeScreenState extends State<HomeScreen> {
           color: AppColors.surfaceAlt,
           alignment: Alignment.center,
           child: const SizedBox(
-            width: 22,
-            height: 22,
+            width: 20,
+            height: 20,
             child: CircularProgressIndicator(strokeWidth: 2),
           ),
         );
@@ -692,20 +752,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
     return AppCard(
       margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(13),
+      padding: const EdgeInsets.all(12),
       child: Column(
         children: <Widget>[
           Row(
             children: <Widget>[
               IconBadge(
                 job.finished && job.error != null ? 'info' : 'film',
-                size: 38,
-                iconSize: 18,
+                size: 36,
+                iconSize: 17,
                 color: job.finished && job.error != null
                     ? AppColors.danger
                     : AppColors.secondary,
               ),
-              const SizedBox(width: 11),
+              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -714,49 +774,41 @@ class _HomeScreenState extends State<HomeScreen> {
                       job.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12.8,
-                        fontWeight: FontWeight.w600,
-                      ),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       meta,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 11,
-                        color: job.error != null
-                            ? AppColors.danger
-                            : AppColors.muted,
+                        fontSize: 10.8,
+                        color: job.error != null ? AppColors.danger : AppColors.muted,
                       ),
                     ),
                   ],
                 ),
               ),
-              if (!job.finished)
-                _miniButton('close', () {
+              _miniButton('close', () {
+                if (!job.finished) {
                   Engine.cancel(job.id);
-                })
-              else
-                _miniButton('close', () {
+                } else {
                   setState(() {
                     _jobs.removeWhere((_ActiveJob entry) => entry.id == job.id);
                   });
-                }),
+                }
+              }),
             ],
           ),
           if (!job.finished) ...<Widget>[
-            const SizedBox(height: 11),
+            const SizedBox(height: 10),
             ClipRRect(
-              borderRadius: BorderRadius.circular(8),
+              borderRadius: BorderRadius.circular(6),
               child: LinearProgressIndicator(
                 value: job.progress <= 0 ? null : job.progress,
-                minHeight: 5,
+                minHeight: 4,
                 backgroundColor: AppColors.surfaceAlt,
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppColors.secondary,
-                ),
+                valueColor: const AlwaysStoppedAnimation<Color>(AppColors.secondary),
               ),
             ),
           ],
@@ -765,17 +817,73 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  /// Engine / build info, laid out so nothing can spill outside the screen.
+  Widget _engineCard() {
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              IconBadge('bolt', size: 32, iconSize: 16),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Engine & build',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              ValueListenableBuilder<String>(
+                valueListenable: SettingsStore.engineVersion,
+                builder: (BuildContext context, String version, Widget? child) {
+                  return AppPill(
+                    label: version.isEmpty ? 'yt-dlp —' : 'yt-dlp $version',
+                    color: AppColors.muted,
+                  );
+                },
+              ),
+              ValueListenableBuilder<bool>(
+                valueListenable: SettingsStore.hasFfmpeg,
+                builder: (BuildContext context, bool full, Widget? child) {
+                  return AppPill(
+                    label: full ? 'Full build · 4K tak' : 'Lite build · 720p tak',
+                    color: full ? AppColors.secondary : AppColors.warning,
+                  );
+                },
+              ),
+              ValueListenableBuilder<int>(
+                valueListenable: SettingsStore.concurrency,
+                builder: (BuildContext context, int value, Widget? child) {
+                  return AppPill(
+                    label: '$value parallel connections',
+                    color: AppColors.primary,
+                  );
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _sectionTitle(String title, String icon) {
     return Row(
       children: <Widget>[
-        AppIcon(icon, size: 15, color: AppColors.secondary),
+        AppIcon(icon, size: 14, color: AppColors.secondary),
         const SizedBox(width: 8),
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.2,
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
           ),
         ),
       ],
@@ -784,60 +892,29 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _platformGrid() {
     return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: _platforms.map((List<String> platform) {
-        final Color color = Color(int.parse(platform[2]));
+      spacing: 7,
+      runSpacing: 7,
+      children: _platforms.map((PlatformInfo platform) {
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: AppColors.surface,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(10),
             border: Border.all(color: AppColors.stroke),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              AppIcon(platform[0], size: 15, color: color),
-              const SizedBox(width: 8),
+              AppIcon(platform.icon, size: 13, color: platform.color),
+              const SizedBox(width: 6),
               Text(
-                platform[1],
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.text,
-                ),
+                platform.short ?? platform.label,
+                style: const TextStyle(fontSize: 10.5, color: AppColors.text),
               ),
             ],
           ),
         );
       }).toList(),
-    );
-  }
-}
-
-class _AnalyzingCard extends StatelessWidget {
-  const _AnalyzingCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return AppCard(
-      child: Row(
-        children: <Widget>[
-          const SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2.2),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              'Link analyze ho raha hai…',
-              style: TextStyle(fontSize: 12.5, color: AppColors.muted),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

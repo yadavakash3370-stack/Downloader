@@ -95,11 +95,17 @@ class Engine {
 
   static Future<Map<String, dynamic>> info() => _invoke('engineInfo');
 
-  static Future<Map<String, dynamic>> probe(String url) =>
-      _invoke('probe', <String, dynamic>{'url': url});
+  static Future<Map<String, dynamic>> probe(
+    String url, {
+    Map<String, String> headers = const <String, String>{},
+  }) =>
+      _invoke('probe', <String, dynamic>{'url': url, 'headers': headers});
 
-  static Future<Map<String, dynamic>> streamUrl(String url) =>
-      _invoke('streamUrl', <String, dynamic>{'url': url});
+  static Future<Map<String, dynamic>> streamUrl(
+    String url, {
+    Map<String, String> headers = const <String, String>{},
+  }) =>
+      _invoke('streamUrl', <String, dynamic>{'url': url, 'headers': headers});
 
   static Future<Map<String, dynamic>> startDownload({
     required String jobId,
@@ -108,6 +114,8 @@ class Engine {
     required bool audioOnly,
     required bool alsoSave,
     required String title,
+    required int concurrency,
+    Map<String, String> headers = const <String, String>{},
   }) {
     return _invoke('download', <String, dynamic>{
       'jobId': jobId,
@@ -116,6 +124,8 @@ class Engine {
       'audioOnly': audioOnly,
       'alsoSave': alsoSave,
       'title': title,
+      'concurrency': concurrency,
+      'headers': headers,
     });
   }
 

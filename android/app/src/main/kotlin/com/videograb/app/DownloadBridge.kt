@@ -40,6 +40,30 @@ class DownloadBridge(
 
     // ------------------------------------------------------------- plumbing
 
+    /** MethodChannel maps arrive as Map<*, *> - normalise to String/String. */
+    private fun stringMap(raw: Any?): Map<String, String> {
+        if (raw !is Map<*, *>) return emptyMap()
+        val out = HashMap<String, String>()
+        for ((key, value) in raw) {
+            if (key == null || value == null) continue
+            val name = key.toString().trim()
+            val header = value.toString().trim()
+            if (name.isNotEmpty() && header.isNotEmpty()) out[name] = header
+        }
+        return out
+    }
+
+    /** Forwards login/session headers (PW etc.) to yt-dlp. */
+    private fun applyHeaders(request: YoutubeDLRequest, headers: Map<String, String>) {
+        for ((name, value) in headers) {
+            if (name.equals("referer", ignoreCase = true)) {
+                request.addOption("--referer", value)
+            } else {
+                request.addOption("--add-header", "$name: $value")
+            }
+        }
+    }
+
     private fun bag(vararg pairs: Pair<String, Any?>): HashMap<String, Any?> {
         val map = HashMap<String, Any?>()
         for (pair in pairs) map[pair.first] = pair.second
@@ -109,7 +133,7 @@ class DownloadBridge(
         when (call.method) {
             "init" -> initEngine(result)
             "engineInfo" -> engineInfo(result)
-            "probe" -> probe(call.argument<String>("url"), result)
+            "probe" -> probe(call, result)
             "download" -> startDownload(call, result)
             "cancel" -> {
                 val jobId = call.argument<String>("jobId") ?: ""
@@ -121,7 +145,7 @@ class DownloadBridge(
                 }
                 reply(result, bag("ok" to stopped))
             }
-            "streamUrl" -> streamUrl(call.argument<String>("url"), result)
+            "streamUrl" -> streamUrl(call, result)
             "updateEngine" -> updateEngine(result)
             "saveCopy" -> saveCopy(
                 call.argument<String>("path"),
@@ -183,8 +207,9 @@ class DownloadBridge(
         )
     }
 
-    private fun probe(url: String?, result: MethodChannel.Result) {
-        val link = url ?: ""
+    private fun probe(call: MethodCall, result: MethodChannel.Result) {
+        val link = call.argument<String>("url") ?: ""
+        val headers = stringMap(call.argument<Any>("headers"))
         if (link.isBlank()) {
             reply(result, bag("ok" to false, "error" to "Link khali hai"))
             return
@@ -195,6 +220,9 @@ class DownloadBridge(
                 val request = YoutubeDLRequest(link)
                 request.addOption("--no-playlist")
                 request.addOption("--no-warnings")
+                request.addOption("--socket-timeout", "15")
+                request.addOption("--extractor-retries", "2")
+                applyHeaders(request, headers)
                 val info = YoutubeDL.getInstance().getInfo(request)
 
                 val heights = ArrayList<Int>()
@@ -265,6 +293,11 @@ class DownloadBridge(
         val format = call.argument<String>("format") ?: "bv*+ba/b"
         val audioOnly = call.argument<Boolean>("audioOnly") ?: false
         val alsoSave = call.argument<Boolean>("alsoSave") ?: true
+        val headers = stringMap(call.argument<Any>("headers"))
+        val rawConcurrency = call.argument<Any>("concurrency")
+        val concurrency = (rawConcurrency as? Number)?.toInt() ?: 8
+        val parallel = concurrency.coerceIn(1, 24)
+        val isManifest = linkIsManifest(url)
 
         if (jobId.isBlank() || url.isBlank()) {
             reply(result, bag("ok" to false, "error" to "Job id ya link missing"))
@@ -290,12 +323,23 @@ class DownloadBridge(
                 request.addOption("--no-mtime")
                 request.addOption("--newline")
                 request.addOption("--no-warnings")
-                request.addOption("--retries", "5")
-                request.addOption("--fragment-retries", "5")
+                request.addOption("--retries", "3")
+                request.addOption("--fragment-retries", "3")
+                request.addOption("--extractor-retries", "2")
+                request.addOption("--socket-timeout", "15")
+                request.addOption("--buffer-size", "64K")
+                request.addOption("--concurrent-fragments", parallel.toString())
+                // Chunked range requests bypass per-connection throttling on
+                // direct video URLs. HLS/DASH manifests are already fragmented,
+                // so they only need -N above.
+                if (!isManifest && parallel > 1) {
+                    request.addOption("--http-chunk-size", "10M")
+                }
                 request.addOption(
                     "-o",
                     File(folder, "%(title).80s [%(id)s].%(ext)s").absolutePath
                 )
+                applyHeaders(request, headers)
 
                 if (audioOnly) {
                     request.addOption("-f", "ba/b")
@@ -305,10 +349,19 @@ class DownloadBridge(
                     }
                 } else {
                     request.addOption("-f", format)
-                    if (ffmpegReady) request.addOption("--merge-output-format", "mp4")
+                    // Do NOT force --merge-output-format mp4: yt-dlp picks a
+                    // codec-compatible container (mp4 for h264+aac, mkv for
+                    // vp9/av01+opus). Forcing mp4 used to break merges and
+                    // silently drop the download to a low-quality stream.
                 }
 
-                emit("stage", bag("jobId" to jobId, "message" to "Preparing"))
+                emit(
+                    "stage",
+                    bag(
+                        "jobId" to jobId,
+                        "message" to "Preparing ($parallel parallel connections)"
+                    )
+                )
 
                 YoutubeDL.getInstance().execute(request, jobId) { progress, eta, line ->
                     val now = System.currentTimeMillis()
@@ -382,8 +435,9 @@ class DownloadBridge(
         }
     }
 
-    private fun streamUrl(url: String?, result: MethodChannel.Result) {
-        val link = url ?: ""
+    private fun streamUrl(call: MethodCall, result: MethodChannel.Result) {
+        val link = call.argument<String>("url") ?: ""
+        val headers = stringMap(call.argument<Any>("headers"))
         if (link.isBlank()) {
             reply(result, bag("ok" to false, "error" to "Link khali hai"))
             return
@@ -408,7 +462,9 @@ class DownloadBridge(
                     ensureEngine()
                     val request = YoutubeDLRequest(link)
                     request.addOption("--no-playlist")
+                    request.addOption("--socket-timeout", "15")
                     request.addOption("-f", selector)
+                    applyHeaders(request, headers)
                     val info = YoutubeDL.getInstance().getInfo(request)
                     direct = info.url
                     if (!direct.isNullOrBlank()) break
@@ -506,6 +562,12 @@ class DownloadBridge(
     }
 
     // ---------------------------------------------------------------- files
+
+    private fun linkIsManifest(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains(".m3u8") || lower.contains(".mpd") ||
+            lower.contains("manifest.googlevideo.com")
+    }
 
     private fun downloadFolder(): File {
         val base = context.getExternalFilesDir(null) ?: context.filesDir

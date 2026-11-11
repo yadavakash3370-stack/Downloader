@@ -108,6 +108,10 @@ jobs:
 
             Install: APK download karein -> "Unknown sources" allow karein -> install.
 
+            Is build me: instant platform detection, behtar quality selectors,
+            parallel/chunked fast downloads (Settings me 1x-16x), professional UI,
+            aur **PW tab** - official pw.live login + lectures app me play/download.
+
             Pehli launch par engine setup hota hai (10-20s). Extractor tootne par
             Settings -> Update engine.
           files: dist/*.apk

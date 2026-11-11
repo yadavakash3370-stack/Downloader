@@ -1,20 +1,21 @@
 import 'package:flutter/material.dart';
 
+/// Neutral, professional dark palette.
 class AppColors {
-  static const Color bg = Color(0xFF07070D);
-  static const Color surface = Color(0xFF11111B);
-  static const Color surfaceAlt = Color(0xFF191926);
-  static const Color stroke = Color(0xFF24243A);
-  static const Color primary = Color(0xFF8B5CF6);
-  static const Color secondary = Color(0xFF22D3EE);
-  static const Color text = Color(0xFFF5F5FB);
-  static const Color muted = Color(0xFF9898B0);
-  static const Color success = Color(0xFF34D399);
-  static const Color danger = Color(0xFFF87171);
-  static const Color warning = Color(0xFFFBBF24);
+  static const Color bg = Color(0xFF0A0B0E);
+  static const Color surface = Color(0xFF13151A);
+  static const Color surfaceAlt = Color(0xFF1A1D24);
+  static const Color stroke = Color(0xFF262A33);
+  static const Color primary = Color(0xFF6366F1);
+  static const Color secondary = Color(0xFF2DD4BF);
+  static const Color text = Color(0xFFECEFF4);
+  static const Color muted = Color(0xFF8A93A3);
+  static const Color success = Color(0xFF22C55E);
+  static const Color danger = Color(0xFFEF4444);
+  static const Color warning = Color(0xFFF59E0B);
 
   static const LinearGradient gradient = LinearGradient(
-    colors: <Color>[primary, secondary],
+    colors: <Color>[Color(0xFF6366F1), Color(0xFF8B5CF6)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
@@ -24,7 +25,7 @@ ThemeData buildAppTheme() {
   final ThemeData base = ThemeData(brightness: Brightness.dark, useMaterial3: true);
 
   OutlineInputBorder border(Color color, double width) => OutlineInputBorder(
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(12),
         borderSide: BorderSide(color: color, width: width),
       );
 
@@ -43,28 +44,28 @@ ThemeData buildAppTheme() {
       displayColor: AppColors.text,
     ),
     appBarTheme: const AppBarTheme(
-      backgroundColor: Colors.transparent,
+      backgroundColor: AppColors.bg,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       centerTitle: false,
       iconTheme: IconThemeData(color: AppColors.text),
       titleTextStyle: TextStyle(
         color: AppColors.text,
-        fontSize: 20,
-        fontWeight: FontWeight.w700,
+        fontSize: 17,
+        fontWeight: FontWeight.w600,
       ),
     ),
     snackBarTheme: const SnackBarThemeData(
       backgroundColor: AppColors.surfaceAlt,
-      contentTextStyle: TextStyle(color: AppColors.text, fontSize: 13),
+      contentTextStyle: TextStyle(color: AppColors.text, fontSize: 12.5),
       behavior: SnackBarBehavior.floating,
     ),
     dividerTheme: const DividerThemeData(color: AppColors.stroke, thickness: 1),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: AppColors.surface,
-      hintStyle: const TextStyle(color: AppColors.muted, fontSize: 14),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      hintStyle: const TextStyle(color: AppColors.muted, fontSize: 13),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       border: border(AppColors.stroke, 1),
       enabledBorder: border(AppColors.stroke, 1),
       focusedBorder: border(AppColors.primary, 1.4),
@@ -74,10 +75,15 @@ ThemeData buildAppTheme() {
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(foregroundColor: AppColors.secondary),
     ),
+    sliderTheme: base.sliderTheme.copyWith(
+      activeTrackColor: AppColors.primary,
+      thumbColor: AppColors.primary,
+      inactiveTrackColor: AppColors.stroke,
+    ),
   );
 }
 
-/// Standard rounded card used across the app.
+/// Standard surface card.
 class AppCard extends StatelessWidget {
   const AppCard({
     required this.child,
@@ -85,7 +91,7 @@ class AppCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(16),
     this.margin,
     this.color,
-    this.radius = 22,
+    this.radius = 16,
     this.borderColor,
   });
 
@@ -105,20 +111,13 @@ class AppCard extends StatelessWidget {
         color: color ?? AppColors.surface,
         borderRadius: BorderRadius.circular(radius),
         border: Border.all(color: borderColor ?? AppColors.stroke),
-        boxShadow: <BoxShadow>[
-          BoxShadow(
-            color: Colors.black.withOpacity(0.35),
-            blurRadius: 24,
-            offset: const Offset(0, 10),
-          ),
-        ],
       ),
       child: child,
     );
   }
 }
 
-/// Small pill label.
+/// Small label / tag.
 class AppPill extends StatelessWidget {
   const AppPill({
     required this.label,
@@ -136,23 +135,23 @@ class AppPill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: background ?? AppColors.surfaceAlt,
-        borderRadius: BorderRadius.circular(30),
+        borderRadius: BorderRadius.circular(8),
         border: Border.all(color: AppColors.stroke),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (icon != null) ...<Widget>[icon!, const SizedBox(width: 6)],
+          if (icon != null) ...<Widget>[icon!, const SizedBox(width: 5)],
           Text(
             label,
             style: TextStyle(
               color: color,
-              fontSize: 11,
+              fontSize: 10.5,
               fontWeight: FontWeight.w600,
-              letterSpacing: 0.3,
+              letterSpacing: 0.1,
             ),
           ),
         ],
