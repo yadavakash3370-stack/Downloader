@@ -1,0 +1,118 @@
+name: Build APK
+
+on:
+  push:
+    branches:
+      - main
+      - "arena/**"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build VideoGrab APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.29.3"
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Point Gradle to the Flutter SDK
+        run: |
+          FLUTTER_SDK="$(dirname "$(dirname "$(command -v flutter)")")"
+          echo "flutter.sdk=$FLUTTER_SDK" > android/local.properties
+          echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> android/local.properties
+
+      # ---------------------------------------------------------------- LITE
+      # ~25 MB: no ffmpeg natives (single-file formats, no merging).
+      - name: Build LITE APK (arm64)
+        run: |
+          set -e
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=false\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
+          flutter build apk --release --target-platform android-arm64
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-arm64-v8a.apk
+          ls -lh dist
+
+      - name: Build LITE APK (armv7 / old phones)
+        run: |
+          set -e
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=false\nvideograb.abi=armeabi-v7a\n" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
+          flutter build apk --release --target-platform android-arm
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-armeabi-v7a.apk
+          ls -lh dist
+
+      # ---------------------------------------------------------------- FULL
+      # ~58 MB: bundled ffmpeg (best-video + best-audio merging, audio->m4a).
+      - name: Build FULL APK (arm64 + ffmpeg)
+        run: |
+          set -e
+          sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
+          printf "videograb.withFfmpeg=true\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
+          rm -rf build/app/outputs build/app/intermediates/merged_native_libs
+          flutter build apk --release --target-platform android-arm64
+          cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-full-arm64-v8a.apk
+          ls -lh dist
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: videograb-apk
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      # Direct download buttons for phones (Releases page).
+      - name: Publish APKs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: VideoGrab - latest APK
+          make_latest: true
+          body: |
+            ## VideoGrab APK
+
+            | File | Size | Kab chunein |
+            | --- | --- | --- |
+            | `VideoGrab-full-arm64-v8a.apk` | ~65 MB | **Recommended** - har quality (merge + audio conversion) |
+            | `VideoGrab-lite-arm64-v8a.apk` | ~30 MB | Chhoti size, single-file formats (720p tak) |
+            | `VideoGrab-lite-armeabi-v7a.apk` | ~29 MB | Purane 32-bit phones |
+
+            Install: APK download karein -> "Unknown sources" allow karein -> install.
+
+            Is build me: instant platform detection, behtar quality selectors,
+            parallel/chunked fast downloads (Settings me 1x-16x), professional UI,
+            aur **PW tab** - official pw.live login + lectures app me play/download.
+
+            Pehli launch par engine setup hota hai (10-20s). Extractor tootne par
+            Settings -> Update engine.
+          files: dist/*.apk
+          fail_on_unmatched_files: true

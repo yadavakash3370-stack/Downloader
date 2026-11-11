@@ -1,0 +1,83 @@
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader("UTF-8") { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def flutterVersionCode = localProperties.getProperty("flutter.versionCode") ?: "1"
+def flutterVersionName = localProperties.getProperty("flutter.versionName") ?: "1.0.0"
+
+// Which ABI lands inside this APK (the yt-dlp/python/ffmpeg natives are per-ABI,
+// so shipping every ABI would bloat the APK to ~200 MB).
+def targetAbi = (project.findProperty("videograb.abi") ?: "arm64-v8a").toString()
+
+android {
+    namespace = "com.videograb.app"
+    compileSdk = 35
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    defaultConfig {
+        applicationId = "com.videograb.app"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = flutterVersionCode.toInteger()
+        versionName = flutterVersionName
+
+        ndk {
+            abiFilters targetAbi
+        }
+    }
+
+    buildTypes {
+        release {
+            // Debug keys keep CI builds installable without extra secrets.
+            signingConfig = signingConfigs.debug
+            minifyEnabled = false
+            shrinkResources = false
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // youtubedl-android loads libpython/libffmpeg from the native library dir.
+            useLegacyPackaging = true
+        }
+    }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+// The "lite" APK is built with -Pvideograb.withFfmpeg=false (see gradle.properties)
+// which drops the ~35 MB ffmpeg natives. The app detects it at runtime.
+def withFfmpeg = (project.findProperty("videograb.withFfmpeg") ?: "true").toString() != "false"
+
+dependencies {
+    implementation "io.github.junkfood02.youtubedl-android:library:0.18.1"
+    if (withFfmpeg) {
+        implementation "io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1"
+    }
+}
