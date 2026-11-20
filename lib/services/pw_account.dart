@@ -62,13 +62,22 @@ class PwSession {
 }
 
 class PwException implements Exception {
-  const PwException(this.message, {this.status = 0, this.needsLogin = false});
+  const PwException(
+    this.message, {
+    this.status = 0,
+    this.needsLogin = false,
+    this.detail = '',
+  });
 
   final String message;
   final int status;
 
   /// True when the fix is "log in (again)".
   final bool needsLogin;
+
+  /// Which PW requests were made and how they answered (no tokens, no
+  /// signed URLs) - shown small under the error so a failure can be reported.
+  final String detail;
 
   @override
   String toString() => message;
@@ -113,6 +122,105 @@ class PwLecture {
   final String note;
 }
 
+/// The ids a pw.live lecture link carries.
+///
+/// `https://www.pw.live/watch/?batchSlug=...&batchSubjectId=...&scheduleId=...
+/// &parentId=<batch id>&childId=<schedule id>`
+class PwLink {
+  const PwLink({
+    this.scheduleId = '',
+    this.batches = const <String>[],
+    this.subjects = const <String>[],
+    this.typeHint = '',
+  });
+
+  final String scheduleId;
+
+  /// Batch id first (when the link has one), then the batch slug.
+  final List<String> batches;
+
+  /// Batch-subject id first, then the subject slug.
+  final List<String> subjects;
+
+  /// `type=` of the link (`penpencilvdo`, `youtube`, ...), lower case.
+  final String typeHint;
+
+  bool get isLecture => scheduleId.isNotEmpty;
+
+  static PwLink parse(String raw) {
+    final Uri? uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.host.isEmpty) return const PwLink();
+    return fromUri(uri);
+  }
+
+  static PwLink fromUri(Uri uri) {
+    // Query keys are matched without case: scheduleId / scheduleid.
+    final Map<String, String> q = <String, String>{};
+    try {
+      uri.queryParameters.forEach((String key, String value) {
+        q.putIfAbsent(key.toLowerCase(), () => value.trim());
+      });
+    } catch (_) {
+      // badly encoded query - fall back to the path only
+    }
+    final List<String> segments = uri.pathSegments;
+    String after(String name) {
+      final int index = segments.indexOf(name);
+      if (index < 0 || index + 1 >= segments.length) return '';
+      return segments[index + 1].trim();
+    }
+
+    String pick(List<String> values) {
+      for (final String value in values) {
+        if (_usable(value)) return value;
+      }
+      return '';
+    }
+
+    List<String> all(List<String> values) {
+      final List<String> out = <String>[];
+      for (final String value in values) {
+        if (_usable(value) && !out.contains(value)) out.add(value);
+      }
+      return out;
+    }
+
+    return PwLink(
+      scheduleId: pick(<String>[
+        q['scheduleid'] ?? '',
+        q['childid'] ?? '',
+        q['lectureid'] ?? '',
+        q['contentid'] ?? '',
+        after('schedule'),
+      ]),
+      batches: all(<String>[
+        q['parentid'] ?? '',
+        q['batchid'] ?? '',
+        q['batchslug'] ?? '',
+        after('batches'),
+        after('batch'),
+      ]),
+      subjects: all(<String>[
+        q['batchsubjectid'] ?? '',
+        q['subjectslug'] ?? '',
+        q['subjectid'] ?? '',
+        after('subjects'),
+        after('subject'),
+      ]),
+      typeHint: pick(<String>[
+        q['type'] ?? '',
+        q['urltype'] ?? '',
+      ]).toLowerCase(),
+    );
+  }
+
+  static bool _usable(String value) {
+    if (value.isEmpty || value.length > 120) return false;
+    final String lower = value.toLowerCase();
+    return lower != 'undefined' && lower != 'null' && lower != 'all';
+  }
+}
+
 class _PwResponse {
   const _PwResponse(this.status, this.json);
 
@@ -135,7 +243,12 @@ class PwAccount {
   static const String webHome = 'https://www.pw.live/study-v2/batches';
   static const String webLogin = 'https://www.pw.live/';
 
-  static const String _api = 'https://api.penpencil.co';
+  static const String _productionApi = 'https://api.penpencil.co';
+
+  /// PW API server. Only the tests point this somewhere else.
+  @visibleForTesting
+  static String apiBase = _productionApi;
+
   static const String _org = '5eb393ee95fab7468a79d189';
   static const String _clientId = 'system-admin';
   static const String _clientSecret = 'KjPXuAVfC5xbmgreETNMaL7z';
@@ -159,7 +272,23 @@ class PwAccount {
   static String _rejectedToken = '';
   static bool _adopting = false;
 
+  // A token PW answered 401 for although the login itself is fine (the
+  // lecture is not in the account): no need to re-check it for every request.
+  static String _checkedToken = '';
+  static DateTime _checkedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
   static bool get loggedIn => session.value != null;
+
+  /// Forgets everything held in memory (tests only).
+  @visibleForTesting
+  static void resetForTest() {
+    session.value = null;
+    _deviceId = '';
+    _rejectedToken = '';
+    _adopting = false;
+    _checkedToken = '';
+    apiBase = _productionApi;
+  }
 
   // ------------------------------------------------------------ lifecycle
 
@@ -386,6 +515,20 @@ class PwAccount {
 
   // ------------------------------------------------------------- resolver
 
+  /// True when [url] is a pw.live link to one lecture (it has a schedule id).
+  static bool isLectureLink(String url) {
+    final Uri? uri = Uri.tryParse(url.trim());
+    if (uri == null || !isPwHost(uri.host)) return false;
+    if (_isMediaPath(uri.path)) return false;
+    return PwLink.fromUri(uri).isLecture;
+  }
+
+  /// True when [url] points straight at a video file or a manifest.
+  static bool isMediaLink(String url) {
+    final Uri? uri = Uri.tryParse(url.trim());
+    return uri != null && uri.host.isNotEmpty && _isMediaPath(uri.path);
+  }
+
   /// Turns a pw.live lecture link into something the app can act on.
   ///
   /// DRM (Widevine) lectures are reported as [PwMediaKind.drm]; the app does
@@ -402,46 +545,12 @@ class PwAccount {
       return _inspect(pageUrl: link, mediaUrl: link);
     }
 
-    final Map<String, String> q = uri.queryParameters;
-    final List<String> segments = uri.pathSegments;
-    String after(String name) {
-      final int index = segments.indexOf(name);
-      if (index < 0 || index + 1 >= segments.length) return '';
-      return segments[index + 1];
-    }
-
-    final String scheduleId = _first(<String>[
-      q['scheduleId'] ?? '',
-      q['childId'] ?? '',
-      q['contentId'] ?? '',
-      q['lectureId'] ?? '',
-      after('schedule'),
-    ]);
-    final String batchSlug = _first(<String>[
-      q['batchSlug'] ?? '',
-      after('batches'),
-      after('batch'),
-    ]);
-    final String batchId = _first(<String>[
-      q['parentId'] ?? '',
-      q['batchId'] ?? '',
-    ]);
-    final String subject = _first(<String>[
-      q['batchSubjectId'] ?? '',
-      q['subjectSlug'] ?? '',
-      q['subjectId'] ?? '',
-      after('subjects'),
-      after('subject'),
-    ]);
-    final String typeHint = _first(<String>[
-      q['type'] ?? '',
-      q['urlType'] ?? '',
-    ]).toLowerCase();
-
-    if (scheduleId.isEmpty) {
+    final PwLink ids = PwLink.fromUri(uri);
+    if (!ids.isLecture) {
       throw const PwException(
         'Ye kisi lecture ka link nahi lag raha. PW par lecture kholkar uska '
-        'link dein (pw.live/watch/?…scheduleId=…), ya lecture PW tab me chalayein.',
+        'link dein (pw.live/watch/?…scheduleId=…), ya lecture PW tab me '
+        'kholkar wahan "Download" dabayein.',
       );
     }
     if (session.value == null) {
@@ -450,35 +559,52 @@ class PwAccount {
         needsLogin: true,
       );
     }
-
-    final List<String> batches = <String>[];
-    for (final String candidate in <String>[batchId, batchSlug]) {
-      if (candidate.isNotEmpty && !batches.contains(candidate)) {
-        batches.add(candidate);
-      }
-    }
-    if (batches.isEmpty) {
+    if (ids.batches.isEmpty) {
       throw const PwException(
         'Link me batch ki jaankari nahi hai. Lecture ka poora link copy karein.',
       );
     }
 
+    final List<String> trace = <String>[];
+    try {
+      return await _resolveLecture(link, ids, trace);
+    } on PwException catch (error) {
+      if (error.detail.isNotEmpty || trace.isEmpty) rethrow;
+      throw PwException(
+        error.message,
+        status: error.status,
+        needsLogin: error.needsLogin,
+        detail: trace.join(' · '),
+      );
+    }
+  }
+
+  static Future<PwLecture> _resolveLecture(
+    String link,
+    PwLink ids,
+    List<String> trace,
+  ) async {
+    final String scheduleId = ids.scheduleId;
+    final List<String> batches = ids.batches;
+
     // 1) Lecture details: title, hosting type, DRM flag.
     Map<String, dynamic> details = <String, dynamic>{};
     String usedBatch = batches.first;
     String lastError = '';
-    if (subject.isNotEmpty) {
-      for (final String batch in batches) {
+    search:
+    for (final String batch in batches) {
+      for (final String subject in ids.subjects) {
         final _PwResponse response = await _authedGet(
           '/v1/batches/${Uri.encodeComponent(batch)}'
           '/subject/${Uri.encodeComponent(subject)}'
           '/schedule/${Uri.encodeComponent(scheduleId)}/schedule-details',
         );
+        trace.add('details ${response.status}');
         final Object? data = response.data;
         if (response.ok && data is Map) {
           details = Map<String, dynamic>.from(data);
           usedBatch = batch;
-          break;
+          break search;
         }
         lastError = _errorOf(response, 'Lecture details nahi mile');
       }
@@ -497,7 +623,7 @@ class PwAccount {
     final int duration = _seconds(video['duration']);
     final String urlType = _first(<String>[
       _str(details['urlType']).toLowerCase(),
-      typeHint,
+      ids.typeHint,
     ]);
     final String rawMedia = _first(<String>[
       _str(details['url']),
@@ -505,6 +631,7 @@ class PwAccount {
     ]);
     final bool flaggedDrm =
         video['drmProtected'] == true || details['drmProtected'] == true;
+    if (urlType.isNotEmpty) trace.add('type $urlType');
 
     // 2) Lectures hosted on a normal video site.
     final String hostedUrl = _externalUrl(rawMedia, urlType);
@@ -551,6 +678,7 @@ class PwAccount {
           'parentId': batch,
         },
       );
+      trace.add('video-url ${response.status}');
       final Object? data = response.data;
       if (response.ok && data is Map) {
         final String base = _str(data['url']);
@@ -570,14 +698,20 @@ class PwAccount {
             : lastError,
       );
     }
+    trace.add('media ${Uri.tryParse(manifest)?.host ?? '?'}');
 
-    return _inspect(
-      pageUrl: link,
-      mediaUrl: manifest,
-      title: title,
-      thumbnail: thumbnail,
-      duration: duration,
-    );
+    try {
+      return await _inspect(
+        pageUrl: link,
+        mediaUrl: manifest,
+        title: title,
+        thumbnail: thumbnail,
+        duration: duration,
+      );
+    } on PwException catch (error) {
+      trace.add('manifest ${error.status == 0 ? 'error' : error.status}');
+      rethrow;
+    }
   }
 
   /// Reads the manifest and reports whether the stream is encrypted.
@@ -710,6 +844,13 @@ class PwAccount {
     _PwResponse response = await _send('GET', path, query: query);
     if (response.status != 401) return response;
 
+    final String failed = session.value?.accessToken ?? '';
+    if (failed.isNotEmpty &&
+        failed == _checkedToken &&
+        DateTime.now().difference(_checkedAt) < const Duration(minutes: 1)) {
+      return response;
+    }
+
     if (await _refresh()) {
       response = await _send('GET', path, query: query);
       if (response.status != 401) return response;
@@ -717,7 +858,11 @@ class PwAccount {
 
     // Is the login itself dead, or is only this lecture not allowed?
     final _PwResponse self = await _send('GET', '/v1/users/self');
-    if (self.ok) return response;
+    if (self.ok) {
+      _checkedToken = session.value?.accessToken ?? '';
+      _checkedAt = DateTime.now();
+      return response;
+    }
 
     await logout();
     throw const PwException(
@@ -734,7 +879,7 @@ class PwAccount {
     Map<String, dynamic>? body,
     String? token,
   }) async {
-    Uri uri = Uri.parse('$_api$path');
+    Uri uri = Uri.parse('$apiBase$path');
     if (query.isNotEmpty) uri = uri.replace(queryParameters: query);
 
     final HttpClient client = HttpClient()

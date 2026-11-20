@@ -15,12 +15,16 @@ class PlayerScreen extends StatefulWidget {
     this.filePath,
     this.networkUrl,
     this.thumbnail = '',
+    this.headers = const <String, String>{},
   });
 
   final String title;
   final String? filePath;
   final String? networkUrl;
   final String thumbnail;
+
+  /// Request headers for [networkUrl] (referer / session of the source page).
+  final Map<String, String> headers;
 
   @override
   State<PlayerScreen> createState() => _PlayerScreenState();
@@ -46,6 +50,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } else {
       controller = VideoPlayerController.networkUrl(
         Uri.parse(widget.networkUrl ?? ''),
+        httpHeaders: widget.headers,
       );
     }
     _controller = controller;

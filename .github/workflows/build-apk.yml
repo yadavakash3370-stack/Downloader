@@ -47,25 +47,35 @@ jobs:
           echo "flutter.sdk=$FLUTTER_SDK" > android/local.properties
           echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> android/local.properties
 
-      # Dart errors are published as an annotation so a failed build can be
-      # diagnosed from the Checks API. The build steps below decide pass/fail.
+      # Analyzer findings are published as annotations, so they can be read
+      # from the Checks API. The test and build steps decide pass/fail.
       - name: Static analysis (report only)
         run: |
           set +e
           flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings > analyze.log 2>&1
-          tail -n 30 analyze.log
-          errors="$(grep -E '^[[:space:]]*error •' analyze.log | head -n 30)"
-          if [ -n "$errors" ]; then
-            msg="$(printf '%s' "$errors" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
-            echo "::error title=flutter analyze::${msg}"
-          fi
+          tail -n 40 analyze.log
+          annotate() {
+            # annotate <error|warning|notice> <title> <text>
+            [ -n "$3" ] || return 0
+            msg="$(printf '%s' "$3" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::$1 title=$2::${msg}"
+          }
+          annotate error "flutter analyze: errors" "$(grep -E '^[[:space:]]*error •' analyze.log | head -n 30)"
+          annotate warning "flutter analyze: warnings" "$(grep -E '^[[:space:]]*warning •' analyze.log | head -n 30)"
+          annotate notice "flutter analyze: infos" "$(grep -E '^[[:space:]]*info •' analyze.log | head -n 30)"
           exit 0
+
+      # PW account client against a local stand-in server (no real network).
+      - name: Unit tests
+        run: |
+          set -o pipefail
+          flutter test --no-pub --reporter expanded 2>&1 | tee test.log
 
       # ---------------------------------------------------------------- LITE
       # ~25 MB: no ffmpeg natives (single-file formats, no merging).
       - name: Build LITE APK (arm64)
         run: |
-          set -e
+          set -eo pipefail
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=false\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
@@ -76,7 +86,7 @@ jobs:
 
       - name: Build LITE APK (armv7 / old phones)
         run: |
-          set -e
+          set -eo pipefail
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=false\nvideograb.abi=armeabi-v7a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
@@ -88,7 +98,7 @@ jobs:
       # ~58 MB: bundled ffmpeg (best-video + best-audio merging, audio->m4a).
       - name: Build FULL APK (arm64 + ffmpeg)
         run: |
-          set -e
+          set -eo pipefail
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=true\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
@@ -100,12 +110,22 @@ jobs:
         if: failure()
         run: |
           set +e
+          annotate() {
+            # annotate <title> <text>
+            [ -n "$2" ] || return 0
+            msg="$(printf '%s' "$2" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=$1::${msg}"
+          }
+          if [ -f test.log ] && grep -qE '\[E\]|Some tests failed|Compilation failed' test.log; then
+            annotate "unit tests: failures" "$(grep -A 16 -F '[E]' test.log | cut -c1-240 | head -n 120)"
+            annotate "unit tests: compile errors" "$(grep -E 'Error:|error •' test.log | cut -c1-240 | head -n 30)"
+            annotate "unit tests: summary" "$(tail -n 12 test.log | cut -c1-240)"
+          fi
           for f in build-*.log; do
             [ -f "$f" ] || continue
             errors="$(grep -E '^e: |^lib/.*[0-9]+:[0-9]+: Error|[Ee]rror:|FAILURE|What went wrong|Unresolved reference|Could not (resolve|find)' "$f" | head -n 40)"
             [ -n "$errors" ] || errors="$(tail -n 25 "$f")"
-            msg="$(printf '%s' "$errors" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
-            echo "::error title=${f}::${msg}"
+            annotate "$f" "$errors"
           done
 
       - name: Upload APK artifacts

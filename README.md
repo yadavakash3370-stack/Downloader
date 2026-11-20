@@ -75,9 +75,11 @@ audio ek hi file me ho (aksar 360–720p). Zyada resolution chahiye to Full APK 
 
 `.github/workflows/build-apk.yml` har push (aur manual dispatch) par:
 
-1. **Lite** arm64 + armv7 build (`videograb.withFfmpeg=false`)
-2. **Full** arm64 build (ffmpeg included)
-3. Artifacts upload + **Release `latest` update** with the three APKs
+1. Static analysis (report) + **unit tests** (`flutter test` — PW login / lecture resolver ek local
+   fake server ke against; asli PW server ko koi request nahi jati)
+2. **Lite** arm64 + armv7 build (`videograb.withFfmpeg=false`)
+3. **Full** arm64 build (ffmpeg included)
+4. Artifacts upload + **Release `latest` update** with the three APKs
 
 Stack: Flutter 3.29.3 · Dart 3 · AGP 8.7.3 · Kotlin 2.1.0 · Gradle 8.12 · Java 17 ·
 minSdk 24 (Android 7.0+) · targetSdk 35.
@@ -104,11 +106,18 @@ aur Download tab me paste karke **Analyze** dabayein. App aapke account se lectu
 | Plain (unencrypted) stream | Download / Play |
 | DRM-protected (Widevine) | Download **nahi** hota. "PW player me dekhein" se PW tab me chalta hai |
 
+Link copy karne ki zaroorat bhi nahi: lecture ko **PW tab** me kholein, neeche **Download** dabayein →
+"Download tab me kholein". App wahi lecture aapke account se check kar leta hai.
+
+Kuch galat ho to error ke neeche ek chhoti line dikhti hai (jaise `details 404 · video-url 403`) —
+PW ke kis request ne kya jawab diya. Us par tap karne se copy ho jati hai; isme token ya signed
+link nahi hota. "PW tab me kholein" button se lecture seedha official player me khul jata hai.
+
 ### 3. PW tab
 
 Official `pw.live` site app ke andar. Lectures site ke player me chalte hain, fullscreen dabane par
-landscape ho jata hai. Neeche bar me account status aur (agar page koi plain media link load kare)
-**Videos** button milta hai.
+landscape ho jata hai. Neeche bar me account status milta hai; lecture khula ho to **Download**
+button, aur agar page koi plain media link load kare to **Videos** button.
 
 > **DRM ke baare me:** PW ke zyadatar paid recorded lectures Widevine DRM se encrypted hote hain.
 > Ye app decryption keys nahi nikalta aur DRM bypass nahi karta, isliye aise lectures sirf official

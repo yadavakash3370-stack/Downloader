@@ -268,8 +268,10 @@ class _StudyScreenState extends State<StudyScreen> {
 
     // A page may have been requested before this tab was ever built.
     final String? requested = AppLinks.takeStudy();
-    final Uri? first = requested == null ? null : Uri.tryParse(requested);
-    _controller.loadRequest(first ?? Uri.parse(PwAccount.webHome));
+    final Uri? first = requested == null ? null : Uri.tryParse(requested.trim());
+    _controller.loadRequest(
+      first != null && first.hasScheme ? first : Uri.parse(PwAccount.webHome),
+    );
 
     // PW is a single-page app: pageFinished may not fire on in-app navigation.
     _hookTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -303,6 +305,21 @@ class _StudyScreenState extends State<StudyScreen> {
   bool get _onPwPage {
     final Uri? uri = Uri.tryParse(_url);
     return uri != null && PwAccount.isPwHost(uri.host);
+  }
+
+  /// A single lecture is open (the page link carries its schedule id).
+  bool get _onLecturePage => PwAccount.isLectureLink(_url);
+
+  /// Hands the open lecture to the Download tab, which asks PW (with the
+  /// logged-in account) what this lecture can do.
+  void _downloadLecture() {
+    final String title = _title.trim();
+    widget.onOpenInDownload(
+      PendingLink(
+        url: _url,
+        title: title.isEmpty || title == 'Physics Wallah' ? '' : title,
+      ),
+    );
   }
 
   /// DRM lectures need the phone's protected media id (Widevine). Only PW
@@ -485,9 +502,10 @@ class _StudyScreenState extends State<StudyScreen> {
   void _onStudyLink() {
     final String? url = AppLinks.takeStudy();
     if (url == null || !mounted) return;
-    final Uri? uri = Uri.tryParse(url);
-    if (uri == null) return;
     widget.onRequestFocus();
+    // An empty request only brings the tab (and the open lecture) forward.
+    final Uri? uri = url.trim().isEmpty ? null : Uri.tryParse(url.trim());
+    if (uri == null || !uri.hasScheme) return;
     _controller.loadRequest(uri);
   }
 
@@ -569,7 +587,8 @@ class _StudyScreenState extends State<StudyScreen> {
   // --------------------------------------------------------------- sheet
 
   Future<void> _openSheet() async {
-    if (_media.isEmpty) return;
+    final bool lecture = _onLecturePage;
+    if (_media.isEmpty && !lecture) return;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
@@ -606,7 +625,9 @@ class _StudyScreenState extends State<StudyScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: <Widget>[
                             Text(
-                              '${_media.length} media links mile',
+                              _media.isEmpty
+                                  ? 'Ye lecture'
+                                  : '${_media.length} media links mile',
                               style: const TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w700,
@@ -633,11 +654,13 @@ class _StudyScreenState extends State<StudyScreen> {
                   child: ListView.separated(
                     controller: scrollController,
                     padding: const EdgeInsets.all(14),
-                    itemCount: _media.length,
+                    itemCount: _media.length + (lecture ? 1 : 0),
                     separatorBuilder: (BuildContext context, int index) =>
                         const SizedBox(height: 8),
-                    itemBuilder: (BuildContext context, int index) =>
-                        _mediaTile(_media[index]),
+                    itemBuilder: (BuildContext context, int index) {
+                      if (lecture && index == 0) return _lectureTile(context);
+                      return _mediaTile(_media[index - (lecture ? 1 : 0)]);
+                    },
                   ),
                 ),
               ],
@@ -645,6 +668,77 @@ class _StudyScreenState extends State<StudyScreen> {
           },
         );
       },
+    );
+  }
+
+  /// First row of the sheet when a lecture page is open.
+  Widget _lectureTile(BuildContext sheetContext) {
+    final bool loggedIn = PwAccount.loggedIn;
+    return AppCard(
+      padding: const EdgeInsets.all(12),
+      borderColor: AppColors.primary.withOpacity(0.35),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const AppPill(label: 'Lecture', color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            loggedIn
+                ? 'App aapke PW account se is lecture ka video check karega. '
+                    'DRM-protected lecture sirf yahin player me chalta hai.'
+                : 'Is lecture ko check karne ke liye PW account login zaroori '
+                    'hai (Download tab par login ka button milega).',
+            style: const TextStyle(
+              fontSize: 9.8,
+              height: 1.45,
+              color: AppColors.muted,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: <Widget>[
+              Expanded(
+                child: _sheetAction(
+                  icon: 'download',
+                  label: 'Download tab me kholein',
+                  accent: true,
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _downloadLecture();
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              _sheetAction(
+                icon: 'copy',
+                label: '',
+                onTap: () async {
+                  await Clipboard.setData(ClipboardData(text: _url));
+                  if (!mounted || !sheetContext.mounted) return;
+                  Navigator.of(sheetContext).pop();
+                  _snack('Lecture link copy ho gaya');
+                },
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -692,6 +786,7 @@ class _StudyScreenState extends State<StudyScreen> {
                         builder: (_) => PlayerScreen(
                           title: media.title,
                           networkUrl: media.url,
+                          headers: _headersFor(media.url),
                         ),
                       ),
                     );
@@ -851,14 +946,17 @@ class _StudyScreenState extends State<StudyScreen> {
   Widget _accountBar() {
     final PwSession? account = PwAccount.session.value;
     final int count = _media.length;
+    final bool lecture = _onLecturePage;
     final String headline = account == null
         ? 'PW account login nahi hai'
         : 'PW: ${account.displayName}';
-    final String detail = count > 0
-        ? '$count media links mile'
-        : (account == null
-            ? 'Login karke lectures yahin dekhein'
-            : 'Lectures yahin player me chalayein');
+    final String detail = lecture
+        ? 'Lecture khula hai — Download dabayein'
+        : (count > 0
+            ? '$count media links mile'
+            : (account == null
+                ? 'Login karke lectures yahin dekhein'
+                : 'Lectures yahin player me chalayein'));
 
     return Container(
       padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
@@ -868,13 +966,16 @@ class _StudyScreenState extends State<StudyScreen> {
       ),
       child: Row(
         children: <Widget>[
-          IconBadge(
-            account == null ? 'graduation' : 'user',
-            size: 32,
-            iconSize: 15,
-            color: account == null ? AppColors.muted : AppColors.success,
-          ),
-          const SizedBox(width: 9),
+          // With a lecture open the Download button needs the room.
+          if (!lecture) ...<Widget>[
+            IconBadge(
+              account == null ? 'graduation' : 'user',
+              size: 32,
+              iconSize: 15,
+              color: account == null ? AppColors.muted : AppColors.success,
+            ),
+            const SizedBox(width: 9),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -900,7 +1001,17 @@ class _StudyScreenState extends State<StudyScreen> {
             ),
           ),
           // Compact buttons: label only, so the text never gets clipped.
-          if (count > 0) ...<Widget>[
+          if (lecture) ...<Widget>[
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 104,
+              child: GradientButton(
+                label: 'Download',
+                height: 34,
+                onPressed: _openSheet,
+              ),
+            ),
+          ] else if (count > 0) ...<Widget>[
             const SizedBox(width: 8),
             SizedBox(
               width: 78,
@@ -915,11 +1026,17 @@ class _StudyScreenState extends State<StudyScreen> {
           SizedBox(
             width: 90,
             child: account == null
-                ? GradientButton(
-                    label: 'Login',
-                    height: 34,
-                    onPressed: _login,
-                  )
+                ? (lecture
+                    ? AppOutlineButton(
+                        label: 'Login',
+                        height: 34,
+                        onPressed: _login,
+                      )
+                    : GradientButton(
+                        label: 'Login',
+                        height: 34,
+                        onPressed: _login,
+                      ))
                 : AppOutlineButton(
                     label: 'Account',
                     height: 34,

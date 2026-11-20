@@ -59,6 +59,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // PW link state.
   PwLecture? _pwBlocked;
   bool _pwNeedsLogin = false;
+  String _pwFallbackUrl = '';
+  String _errorDetail = '';
   String _stage = '';
 
   static const List<PlatformInfo> _platforms = <PlatformInfo>[
@@ -104,8 +106,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _info = null;
       _error = null;
+      _errorDetail = '';
       _pwBlocked = null;
       _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
       _quality = 0;
     });
     Future<void>.microtask(_analyze);
@@ -203,8 +207,10 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       _info = null;
       _error = null;
+      _errorDetail = '';
       _pwBlocked = null;
       _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
     });
   }
 
@@ -216,8 +222,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _openInPwPlayer(PwLecture lecture) {
-    final bool page = !PlatformDetector.isDirectMedia(lecture.pageUrl);
-    AppLinks.openInStudyTab(page ? lecture.pageUrl : PwAccount.webHome);
+    // A stream link has no page of its own: just bring the PW tab (where the
+    // lecture is already open) to the front.
+    final bool page = !PwAccount.isMediaLink(lecture.pageUrl);
+    AppLinks.openInStudyTab(page ? lecture.pageUrl : '');
   }
 
   String _friendly(String raw) {
@@ -244,17 +252,20 @@ class _HomeScreenState extends State<HomeScreen> {
     FocusScope.of(context).unfocus();
 
     final bool pwLink = PlatformDetector.detect(url)?.id == 'pw';
-    // Headers from the PW tab are used only for the exact link they came with.
-    final bool fromBrowser = url == _handoffUrl;
+    // Session headers captured in the PW tab are used only for the exact
+    // stream link they came with.
+    final bool fromBrowser = url == _handoffUrl && PwAccount.isMediaLink(url);
     Map<String, String> headers =
         fromBrowser ? _handoffHeaders : const <String, String>{};
 
     setState(() {
       _analyzing = true;
       _error = null;
+      _errorDetail = '';
       _info = null;
       _pwBlocked = null;
       _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
       _quality = 0;
       _stage = pwLink ? 'PW account se lecture khol rahe hain…' : '';
     });
@@ -275,18 +286,23 @@ class _HomeScreenState extends State<HomeScreen> {
           return;
         }
         target = lecture.mediaUrl;
-        if (!fromBrowser) headers = lecture.headers;
+        // The page's own session wins; the lecture adds what is missing.
+        headers = <String, String>{...lecture.headers, ...headers};
         pwTitle = lecture.title;
         pwThumbnail = lecture.thumbnail;
       } on PwException catch (error) {
         if (!mounted) return;
         // A stream link from the PW tab can still work with the page's own
-        // session, so only stop here for links the user typed or pasted.
+        // session, so only stop here for lecture page links.
         if (!fromBrowser) {
           setState(() {
             _analyzing = false;
             _error = error.message;
+            _errorDetail = error.detail;
             _pwNeedsLogin = error.needsLogin;
+            _pwFallbackUrl = !error.needsLogin && PwAccount.isLectureLink(url)
+                ? url
+                : '';
           });
           return;
         }
@@ -296,6 +312,7 @@ class _HomeScreenState extends State<HomeScreen> {
           setState(() {
             _analyzing = false;
             _error = 'PW lecture nahi khul paya. $error';
+            _pwFallbackUrl = PwAccount.isLectureLink(url) ? url : '';
           });
           return;
         }
@@ -388,18 +405,35 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _resolvingStream = false);
 
     if (result['ok'] == true && result['url'] is String) {
+      final String streamUrl = result['url'] as String;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerScreen(
             title: info.title,
-            networkUrl: result['url'] as String,
+            networkUrl: streamUrl,
             thumbnail: info.thumbnail,
+            headers: _playerHeaders(streamUrl),
           ),
         ),
       );
     } else {
       _snack((result['error'] ?? 'Stream available nahi hai') as String);
     }
+  }
+
+  /// Headers for in-app playback. A login (cookie / token) is only ever sent
+  /// to PW's own hosts; a plain referer may go to the stream's CDN.
+  Map<String, String> _playerHeaders(String streamUrl) {
+    if (_infoHeaders.isEmpty) return const <String, String>{};
+    final Uri? uri = Uri.tryParse(streamUrl);
+    final bool pwHost = uri != null && PwAccount.isPwHost(uri.host);
+    final Map<String, String> out = <String, String>{};
+    _infoHeaders.forEach((String key, String value) {
+      final String lower = key.toLowerCase();
+      final bool secret = lower == 'authorization' || lower == 'cookie';
+      if (!secret || pwHost) out[key] = value;
+    });
+    return out;
   }
 
   void _snack(String message) {
@@ -421,11 +455,24 @@ class _HomeScreenState extends State<HomeScreen> {
         _urlCard(),
         if (_error != null) ...<Widget>[
           const SizedBox(height: 12),
-          _errorCard(
-            _error!,
-            actionLabel: _pwNeedsLogin ? 'PW account login' : null,
-            onAction: _pwNeedsLogin ? _pwLogin : null,
-          ),
+          if (_pwNeedsLogin)
+            _errorCard(
+              _error!,
+              detail: _errorDetail,
+              actionLabel: 'PW account login',
+              actionIcon: 'key',
+              onAction: _pwLogin,
+            )
+          else if (_pwFallbackUrl.isNotEmpty)
+            _errorCard(
+              _error!,
+              detail: _errorDetail,
+              actionLabel: 'PW tab me kholein',
+              actionIcon: 'play',
+              onAction: () => AppLinks.openInStudyTab(_pwFallbackUrl),
+            )
+          else
+            _errorCard(_error!, detail: _errorDetail),
         ],
         if (_pwBlocked != null) ...<Widget>[
           const SizedBox(height: 12),
@@ -599,7 +646,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _errorCard(
     String message, {
+    String detail = '',
     String? actionLabel,
+    String actionIcon = 'key',
     VoidCallback? onAction,
   }) {
     return Container(
@@ -629,11 +678,50 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ],
           ),
+          if (detail.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 9),
+            // Which PW requests ran and how they answered. Tap to copy, so a
+            // failure can be reported exactly.
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () async {
+                await Clipboard.setData(
+                  ClipboardData(text: '$message\n[$detail]'),
+                );
+                _snack('Error detail copy ho gaya');
+              },
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(9, 6, 9, 6),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceAlt,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        detail,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 9.6,
+                          height: 1.4,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const AppIcon('copy', size: 12, color: AppColors.muted),
+                  ],
+                ),
+              ),
+            ),
+          ],
           if (actionLabel != null && onAction != null) ...<Widget>[
             const SizedBox(height: 12),
             GradientButton(
               label: actionLabel,
-              icon: 'key',
+              icon: actionIcon,
               height: 44,
               onPressed: onAction,
             ),
