@@ -4,11 +4,14 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../services/app_links.dart';
+import '../services/pw_account.dart';
 import '../theme.dart';
 import '../widgets/svg_icon.dart';
 import 'player_screen.dart';
+import 'pw_login_screen.dart';
 
 class DetectedMedia {
   DetectedMedia({required this.url, required this.title, required this.kind});
@@ -30,28 +33,30 @@ class DetectedMedia {
 
 /// Official PW (Physics Wallah) website inside the app.
 ///
-/// Login is done on pw.live itself in the WebView - the app never reads or
-/// stores the password/OTP. Lectures play in the site's own player, and any
-/// plain (non-DRM) media URL the page loads can be played or sent to the
-/// downloader with the session headers that the page used.
+/// Lectures play in the site's own player (including DRM lectures, through
+/// the phone's built-in Widevine). When the user logs in on the site, the app
+/// links that login to the PW account used by the Download tab. Plain
+/// (non-DRM) media URLs the page loads can be played or sent to the
+/// downloader.
 class StudyScreen extends StatefulWidget {
   const StudyScreen({
     required this.active,
     required this.onOpenInDownload,
+    required this.onRequestFocus,
     super.key,
   });
 
   final bool active;
   final void Function(PendingLink link) onOpenInDownload;
 
+  /// Asks the shell to bring the PW tab to the front.
+  final VoidCallback onRequestFocus;
+
   @override
   State<StudyScreen> createState() => _StudyScreenState();
 }
 
 class _StudyScreenState extends State<StudyScreen> {
-  static const String _startUrl = 'https://www.pw.live/study-v2/batches';
-  static const String _loginUrl = 'https://www.pw.live/';
-
   static const String _hookScript = r'''
 (function () {
   if (window.__vgHooked) { return; }
@@ -59,11 +64,24 @@ class _StudyScreenState extends State<StudyScreen> {
   var seen = {};
   var session = {};
   var lastSession = '';
-  var watch = ['authorization', 'cookie', 'x-auth-token', 'x-access-token',
-               'x-session-id', 'x-pw-token', 'x-user-token', 'referer'];
+  var lastToken = '';
+  var watch = ['authorization', 'cookie', 'referer'];
 
   function post(msg) {
     try { VideoGrab.postMessage(JSON.stringify(msg)); } catch (e) {}
+  }
+  function pwHost(h) {
+    h = String(h || '').toLowerCase();
+    return h === 'pw.live' || /\.pw\.live$/.test(h) ||
+           h === 'penpencil.co' || /\.penpencil\.co$/.test(h);
+  }
+  function pwPage() {
+    return pwHost(location.hostname);
+  }
+  function pwRequest(u) {
+    try {
+      return pwHost(new URL(String(u), location.href).hostname);
+    } catch (e) { return false; }
   }
   function isMedia(u) {
     return /\.(m3u8|mp4|mpd|m4a|webm)(\?|#|$)/i.test(u);
@@ -78,13 +96,26 @@ class _StudyScreenState extends State<StudyScreen> {
             title: document.title || 'PW lecture'});
     } catch (e) {}
   }
-  function capture(name, value) {
+  function token(value) {
+    try {
+      if (!pwPage()) { return; }
+      var m = String(value || '').match(
+          /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/);
+      if (!m || m[0] === lastToken) { return; }
+      lastToken = m[0];
+      post({type: 'token', token: m[0]});
+    } catch (e) {}
+  }
+  function capture(name, value, url) {
     try {
       var n = String(name).toLowerCase();
       if (watch.indexOf(n) < 0) { return; }
+      if (!pwPage() || !pwRequest(url)) { return; }
       var v = String(value);
-      if (!v || session[String(name)] === v) { return; }
-      session[String(name)] = v;
+      if (!v) { return; }
+      if (n === 'authorization') { token(v); }
+      if (session[n] === v) { return; }
+      session[n] = v;
       var json = JSON.stringify(session);
       if (json !== lastSession) {
         lastSession = json;
@@ -92,27 +123,46 @@ class _StudyScreenState extends State<StudyScreen> {
       }
     } catch (e) {}
   }
-  function captureHeaders(headers) {
+  function captureHeaders(headers, url) {
     try {
       if (!headers) { return; }
       if (typeof headers.forEach === 'function') {
-        headers.forEach(function (v, k) { capture(k, v); });
+        headers.forEach(function (v, k) { capture(k, v, url); });
       } else if (Array.isArray(headers)) {
-        headers.forEach(function (pair) { capture(pair[0], pair[1]); });
+        headers.forEach(function (pair) { capture(pair[0], pair[1], url); });
       } else {
-        Object.keys(headers).forEach(function (k) { capture(k, headers[k]); });
+        Object.keys(headers).forEach(function (k) {
+          capture(k, headers[k], url);
+        });
       }
+    } catch (e) {}
+  }
+  function scanStorage() {
+    try {
+      if (!pwPage() || !window.localStorage) { return; }
+      var best = null;
+      var rank = 9;
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (!k || !/token/i.test(k) || /refresh/i.test(k)) { continue; }
+        var v = localStorage.getItem(k);
+        if (!v || v.indexOf('eyJ') < 0) { continue; }
+        var r = /^token$/i.test(k) ? 0 : (/access/i.test(k) ? 1 : 2);
+        if (r < rank) { rank = r; best = v; }
+      }
+      if (best) { token(best); }
     } catch (e) {}
   }
   try {
     var open = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (method, url) {
+      try { this.__vgUrl = String(url); } catch (e) {}
       send(url, 'xhr');
       return open.apply(this, arguments);
     };
     var setHeader = XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-      capture(name, value);
+      capture(name, value, this.__vgUrl || '');
       return setHeader.apply(this, arguments);
     };
   } catch (e) {}
@@ -123,15 +173,16 @@ class _StudyScreenState extends State<StudyScreen> {
         try {
           var u = (typeof input === 'string') ? input : (input && input.url);
           send(u, 'fetch');
-          if (init && init.headers) { captureHeaders(init.headers); }
-          if (input && input.headers) { captureHeaders(input.headers); }
+          if (init && init.headers) { captureHeaders(init.headers, u); }
+          if (input && typeof input !== 'string' && input.headers) {
+            captureHeaders(input.headers, u);
+          }
         } catch (e) {}
         return origFetch.apply(this, arguments);
       };
     }
   } catch (e) {}
-  try { capture('Cookie', document.cookie); } catch (e) {}
-  setInterval(function () {
+  function sweep() {
     try {
       var videos = document.querySelectorAll('video');
       for (var i = 0; i < videos.length; i++) {
@@ -147,9 +198,12 @@ class _StudyScreenState extends State<StudyScreen> {
           send(entries[k].name, 'perf');
         }
       }
-      capture('Cookie', document.cookie);
+      if (pwPage()) { capture('cookie', document.cookie, location.href); }
+      scanStorage();
     } catch (e) {}
-  }, 4000);
+  }
+  sweep();
+  setInterval(sweep, 4000);
 })();
 ''';
 
@@ -158,15 +212,21 @@ class _StudyScreenState extends State<StudyScreen> {
   Map<String, String> _headers = <String, String>{};
 
   Timer? _hookTimer;
+  PwSession? _lastSession;
   bool _loading = true;
+  bool _fullscreen = false;
   int _progress = 0;
   String _title = 'Physics Wallah';
-  String _url = _startUrl;
+  String _url = PwAccount.webHome;
 
   @override
   void initState() {
     super.initState();
-    _controller = WebViewController()
+    _lastSession = PwAccount.session.value;
+    PwAccount.session.addListener(_onSessionChanged);
+    AppLinks.study.addListener(_onStudyLink);
+
+    _controller = WebViewController(onPermissionRequest: _onPermissionRequest)
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setBackgroundColor(AppColors.bg)
       ..addJavaScriptChannel('VideoGrab', onMessageReceived: _onJsMessage)
@@ -183,6 +243,12 @@ class _StudyScreenState extends State<StudyScreen> {
               });
             }
           },
+          onUrlChange: (UrlChange change) {
+            final String? next = change.url;
+            if (next != null && next.isNotEmpty && mounted) {
+              setState(() => _url = next);
+            }
+          },
           onPageFinished: (String url) async {
             if (mounted) {
               setState(() {
@@ -197,8 +263,13 @@ class _StudyScreenState extends State<StudyScreen> {
             }
           },
         ),
-      )
-      ..loadRequest(Uri.parse(_startUrl));
+      );
+    _configurePlatform();
+
+    // A page may have been requested before this tab was ever built.
+    final String? requested = AppLinks.takeStudy();
+    final Uri? first = requested == null ? null : Uri.tryParse(requested);
+    _controller.loadRequest(first ?? Uri.parse(PwAccount.webHome));
 
     // PW is a single-page app: pageFinished may not fire on in-app navigation.
     _hookTimer = Timer.periodic(const Duration(seconds: 3), (_) {
@@ -209,7 +280,215 @@ class _StudyScreenState extends State<StudyScreen> {
   @override
   void dispose() {
     _hookTimer?.cancel();
+    PwAccount.session.removeListener(_onSessionChanged);
+    AppLinks.study.removeListener(_onStudyLink);
     super.dispose();
+  }
+
+  /// Android-only WebView settings needed by the official lecture player.
+  void _configurePlatform() {
+    final Object platform = _controller.platform;
+    if (platform is AndroidWebViewController) {
+      platform.setMediaPlaybackRequiresUserGesture(false);
+      platform.setCustomWidgetCallbacks(
+        onShowCustomWidget: _enterFullscreen,
+        onHideCustomWidget: _leaveFullscreen,
+      );
+      AndroidWebViewCookieManager(
+        const PlatformWebViewCookieManagerCreationParams(),
+      ).setAcceptThirdPartyCookies(platform, true);
+    }
+  }
+
+  bool get _onPwPage {
+    final Uri? uri = Uri.tryParse(_url);
+    return uri != null && PwAccount.isPwHost(uri.host);
+  }
+
+  /// DRM lectures need the phone's protected media id (Widevine). Only PW
+  /// pages get it; camera / microphone requests are refused.
+  void _onPermissionRequest(WebViewPermissionRequest request) {
+    final bool onlyDrm = request.types.isNotEmpty &&
+        request.types.every(
+          (WebViewPermissionResourceType type) =>
+              type.name == 'protectedMediaId',
+        );
+    if (onlyDrm && _onPwPage) {
+      request.grant();
+    } else {
+      request.deny();
+    }
+  }
+
+  // ---------------------------------------------------------- fullscreen
+
+  void _enterFullscreen(Widget view, void Function() onHidden) {
+    if (!mounted) {
+      onHidden();
+      return;
+    }
+    _fullscreen = true;
+    SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+
+    Navigator.of(context, rootNavigator: true)
+        .push<void>(
+          MaterialPageRoute<void>(
+            fullscreenDialog: true,
+            builder: (BuildContext context) {
+              return ColoredBox(color: Colors.black, child: view);
+            },
+          ),
+        )
+        .whenComplete(() {
+          // True when the user left with the back button (not the player).
+          final bool closedByUser = _fullscreen;
+          _fullscreen = false;
+          SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+            DeviceOrientation.portraitUp,
+          ]);
+          SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+          if (closedByUser) onHidden();
+        });
+  }
+
+  void _leaveFullscreen() {
+    if (!_fullscreen || !mounted) return;
+    _fullscreen = false;
+    Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  // ------------------------------------------------------------- account
+
+  void _onSessionChanged() {
+    final PwSession? next = PwAccount.session.value;
+    final bool loggedOut = _lastSession != null && next == null;
+    _lastSession = next;
+    if (loggedOut) _clearWebLogin();
+    if (mounted) setState(() {});
+  }
+
+  /// Logout also signs the website out, otherwise the page would hand the
+  /// same login straight back.
+  Future<void> _clearWebLogin() async {
+    try {
+      await WebViewCookieManager().clearCookies();
+      await _controller.clearLocalStorage();
+    } catch (_) {
+      // storage already empty
+    }
+    if (!mounted) return;
+    setState(() {
+      _headers = <String, String>{};
+      _media.clear();
+    });
+    await _controller.loadRequest(Uri.parse(PwAccount.webHome));
+  }
+
+  /// The user logged in on pw.live: link that login to the app's PW account.
+  Future<void> _adopt(String token) async {
+    String? current;
+    try {
+      current = await _controller.currentUrl();
+    } catch (_) {
+      current = null;
+    }
+    final Uri? page = current == null ? null : Uri.tryParse(current);
+    if (page == null || !PwAccount.isPwHost(page.host)) return;
+
+    final bool wasLoggedIn = PwAccount.loggedIn;
+    final bool linked = await PwAccount.adoptToken(token);
+    if (linked && !wasLoggedIn && mounted) {
+      final String name = PwAccount.session.value?.displayName ?? '';
+      _snack('PW account connect ho gaya${name.isEmpty ? '' : ' — $name'}');
+    }
+  }
+
+  Future<void> _login() async {
+    final bool ok = await PwLoginScreen.open(context);
+    if (ok && mounted) _snack('PW account login ho gaya');
+  }
+
+  Future<void> _openAccountSheet() async {
+    final PwSession? current = PwAccount.session.value;
+    if (current == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const IconBadge('user', size: 40, iconSize: 19, gradient: true),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            current.displayName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            current.source == 'web'
+                                ? 'PW account · website login'
+                                : 'PW account · OTP login',
+                            style: const TextStyle(
+                              fontSize: 10.8,
+                              color: AppColors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const AppPill(label: 'Connected', color: AppColors.success),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                AppOutlineButton(
+                  label: 'Logout',
+                  icon: 'logout',
+                  height: 44,
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    PwAccount.logout();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ------------------------------------------------------------- webview
+
+  void _onStudyLink() {
+    final String? url = AppLinks.takeStudy();
+    if (url == null || !mounted) return;
+    final Uri? uri = Uri.tryParse(url);
+    if (uri == null) return;
+    widget.onRequestFocus();
+    _controller.loadRequest(uri);
   }
 
   Future<void> _injectHooks() async {
@@ -224,7 +503,13 @@ class _StudyScreenState extends State<StudyScreen> {
     try {
       final Object? decoded = jsonDecode(message.message);
       if (decoded is! Map) return;
-      final String type = (decoded['type'] as String?) ?? '';
+      final Object? type = decoded['type'];
+
+      if (type == 'token') {
+        final Object? token = decoded['token'];
+        if (token is String && token.isNotEmpty) _adopt(token);
+        return;
+      }
 
       if (type == 'session') {
         final Object? raw = decoded['headers'];
@@ -245,13 +530,15 @@ class _StudyScreenState extends State<StudyScreen> {
       if (rawUrl is! String || rawUrl.length < 8) return;
       if (_media.any((DetectedMedia item) => item.url == rawUrl)) return;
       if (!mounted) return;
+      final Object? title = decoded['title'];
+      final Object? kind = decoded['kind'];
       setState(() {
         _media.insert(
           0,
           DetectedMedia(
             url: rawUrl,
-            title: (decoded['title'] as String?) ?? _title,
-            kind: (decoded['kind'] as String?) ?? 'media',
+            title: title is String && title.isNotEmpty ? title : _title,
+            kind: kind is String ? kind : 'media',
           ),
         );
         if (_media.length > 50) _media.removeLast();
@@ -260,6 +547,26 @@ class _StudyScreenState extends State<StudyScreen> {
       // ignore malformed messages
     }
   }
+
+  /// The PW login (token / cookies) is only ever forwarded to PW's own hosts.
+  Map<String, String> _headersFor(String url) {
+    final Uri? uri = Uri.tryParse(url);
+    if (uri != null && PwAccount.isPwHost(uri.host)) {
+      final Map<String, String> headers = Map<String, String>.from(_headers);
+      headers.putIfAbsent('referer', () => 'https://www.pw.live/');
+      return headers;
+    }
+    return const <String, String>{'referer': 'https://www.pw.live/'};
+  }
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
+  }
+
+  // --------------------------------------------------------------- sheet
 
   Future<void> _openSheet() async {
     if (_media.isEmpty) return;
@@ -300,16 +607,20 @@ class _StudyScreenState extends State<StudyScreen> {
                           children: <Widget>[
                             Text(
                               '${_media.length} media links mile',
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             const SizedBox(height: 2),
-                            Text(
-                              _headers.isEmpty
-                                  ? 'Page ke plain (non-DRM) streams'
-                                  : 'Session headers bhi download ke saath bhejenge',
+                            const Text(
+                              'Sirf plain (non-DRM) streams save ho sakte hain',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 10, color: AppColors.muted),
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: AppColors.muted,
+                              ),
                             ),
                           ],
                         ),
@@ -352,7 +663,10 @@ class _StudyScreenState extends State<StudyScreen> {
                   media.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ],
@@ -396,7 +710,7 @@ class _StudyScreenState extends State<StudyScreen> {
                       PendingLink(
                         url: media.url,
                         title: media.title,
-                        headers: Map<String, String>.from(_headers),
+                        headers: _headersFor(media.url),
                       ),
                     );
                   },
@@ -410,9 +724,7 @@ class _StudyScreenState extends State<StudyScreen> {
                   await Clipboard.setData(ClipboardData(text: media.url));
                   if (!mounted) return;
                   Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Link copy ho gaya')),
-                  );
+                  _snack('Link copy ho gaya');
                 },
               ),
             ],
@@ -440,12 +752,18 @@ class _StudyScreenState extends State<StudyScreen> {
           padding: EdgeInsets.symmetric(horizontal: label.isEmpty ? 10 : 8),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: accent ? Colors.transparent : AppColors.stroke),
+            border: Border.all(
+              color: accent ? Colors.transparent : AppColors.stroke,
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              AppIcon(icon, size: 13, color: accent ? Colors.white : AppColors.text),
+              AppIcon(
+                icon,
+                size: 13,
+                color: accent ? Colors.white : AppColors.text,
+              ),
               if (label.isNotEmpty) ...<Widget>[
                 const SizedBox(width: 5),
                 Flexible(
@@ -467,6 +785,8 @@ class _StudyScreenState extends State<StudyScreen> {
       ),
     );
   }
+
+  // ------------------------------------------------------------------ ui
 
   Widget _toolbar() {
     return Container(
@@ -493,7 +813,10 @@ class _StudyScreenState extends State<StudyScreen> {
                   _loading ? 'Loading…' : _title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600),
+                  style: const TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 1),
                 Text(
@@ -505,8 +828,10 @@ class _StudyScreenState extends State<StudyScreen> {
               ],
             ),
           ),
-          _toolButton('home', () => _controller.loadRequest(Uri.parse(_startUrl))),
-          _toolButton('lock', () => _controller.loadRequest(Uri.parse(_loginUrl))),
+          _toolButton(
+            'home',
+            () => _controller.loadRequest(Uri.parse(PwAccount.webHome)),
+          ),
         ],
       ),
     );
@@ -523,9 +848,91 @@ class _StudyScreenState extends State<StudyScreen> {
     );
   }
 
+  Widget _accountBar() {
+    final PwSession? account = PwAccount.session.value;
+    final int count = _media.length;
+    final String headline = account == null
+        ? 'PW account login nahi hai'
+        : 'PW: ${account.displayName}';
+    final String detail = count > 0
+        ? '$count media links mile'
+        : (account == null
+            ? 'Login karke lectures yahin dekhein'
+            : 'Lectures yahin player me chalayein');
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.stroke)),
+      ),
+      child: Row(
+        children: <Widget>[
+          IconBadge(
+            account == null ? 'graduation' : 'user',
+            size: 32,
+            iconSize: 15,
+            color: account == null ? AppColors.muted : AppColors.success,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  headline,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 1),
+                Text(
+                  detail,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 9.2, color: AppColors.muted),
+                ),
+              ],
+            ),
+          ),
+          // Compact buttons: label only, so the text never gets clipped.
+          if (count > 0) ...<Widget>[
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 78,
+              child: AppOutlineButton(
+                label: 'Videos',
+                height: 34,
+                onPressed: _openSheet,
+              ),
+            ),
+          ],
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 90,
+            child: account == null
+                ? GradientButton(
+                    label: 'Login',
+                    height: 34,
+                    onPressed: _login,
+                  )
+                : AppOutlineButton(
+                    label: 'Account',
+                    height: 34,
+                    onPressed: _openAccountSheet,
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final int count = _media.length;
     return PopScope<Object?>(
       canPop: !widget.active,
       onPopInvokedWithResult: (bool didPop, Object? result) async {
@@ -547,55 +954,7 @@ class _StudyScreenState extends State<StudyScreen> {
               valueColor: const AlwaysStoppedAnimation<Color>(AppColors.primary),
             ),
           Expanded(child: WebViewWidget(controller: _controller)),
-          Container(
-            padding: const EdgeInsets.fromLTRB(12, 9, 12, 9),
-            decoration: const BoxDecoration(
-              color: AppColors.surface,
-              border: Border(top: BorderSide(color: AppColors.stroke)),
-            ),
-            child: Row(
-              children: <Widget>[
-                IconBadge(
-                  'graduation',
-                  size: 32,
-                  iconSize: 15,
-                  color: count > 0 ? AppColors.secondary : AppColors.muted,
-                ),
-                const SizedBox(width: 9),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        count > 0 ? '$count media links detected' : 'pw.live — apne account me login karein',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 1),
-                      const Text(
-                        'Lectures site par dekhein · link milne par Download',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 9.2, color: AppColors.muted),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 96,
-                  child: AppOutlineButton(
-                    label: count > 0 ? 'Videos' : 'Refresh',
-                    icon: count > 0 ? 'film' : 'refresh',
-                    height: 34,
-                    onPressed: count > 0 ? _openSheet : () => _controller.reload(),
-                  ),
-                ),
-              ],
-            ),
-          ),
+          _accountBar(),
         ],
       ),
     );

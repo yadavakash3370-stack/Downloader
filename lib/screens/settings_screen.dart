@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../services/engine.dart';
 import '../services/library_store.dart';
+import '../services/pw_account.dart';
 import '../services/settings_store.dart';
 import '../theme.dart';
 import '../widgets/svg_icon.dart';
+import 'pw_login_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -75,6 +77,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       children: <Widget>[
         _header(),
         const SizedBox(height: 18),
+        _sectionLabel('PW ACCOUNT', 'graduation'),
+        const SizedBox(height: 9),
+        _pwCard(),
+        const SizedBox(height: 18),
         _sectionLabel('PERFORMANCE', 'bolt'),
         const SizedBox(height: 9),
         _speedCard(),
@@ -107,7 +113,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: <Widget>[
               Text('Settings', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
               SizedBox(height: 3),
-              Text('Speed, engine, storage', style: TextStyle(fontSize: 11, color: AppColors.muted)),
+              Text('PW account, speed, engine, storage', style: TextStyle(fontSize: 11, color: AppColors.muted)),
             ],
           ),
         ),
@@ -130,6 +136,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _pwLogin() async {
+    final bool ok = await PwLoginScreen.open(context);
+    if (ok) _snack('PW account login ho gaya');
+  }
+
+  Widget _pwCard() {
+    return ValueListenableBuilder<PwSession?>(
+      valueListenable: PwAccount.session,
+      builder: (BuildContext context, PwSession? account, Widget? child) {
+        return AppCard(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Row(
+                children: <Widget>[
+                  IconBadge(
+                    account == null ? 'graduation' : 'user',
+                    size: 34,
+                    iconSize: 16,
+                    gradient: account != null,
+                  ),
+                  const SizedBox(width: 11),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          account == null
+                              ? 'Physics Wallah'
+                              : account.displayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          account == null
+                              ? 'Login nahi hai'
+                              : (account.source == 'web'
+                                  ? 'Website login se connected'
+                                  : 'OTP login se connected'),
+                          style: const TextStyle(
+                            fontSize: 10.5,
+                            color: AppColors.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  AppPill(
+                    label: account == null ? 'Off' : 'Connected',
+                    color: account == null ? AppColors.muted : AppColors.success,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 11),
+              const Text(
+                'Login ke baad PW lecture ka link Download tab me daalein — app '
+                'use aapke account se kholta hai. DRM-protected lectures sirf '
+                'PW tab ke player me chalte hain, download nahi hote.',
+                style: TextStyle(fontSize: 10.8, color: AppColors.muted, height: 1.5),
+              ),
+              const SizedBox(height: 13),
+              if (account == null)
+                GradientButton(
+                  label: 'PW account login',
+                  icon: 'key',
+                  height: 44,
+                  onPressed: _pwLogin,
+                )
+              else
+                AppOutlineButton(
+                  label: 'Logout',
+                  icon: 'logout',
+                  height: 44,
+                  onPressed: () async {
+                    await PwAccount.logout();
+                    _snack('PW account logout ho gaya');
+                  },
+                ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -322,7 +419,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       <String>['search', 'Download tab me Analyze dabayein'],
       <String>['hd', 'Quality chun kar Download ya Play karein'],
       <String>['folder', 'Library tab se offline dekhein'],
-      <String>['graduation', 'PW tab me login karke lectures dekhein / save karein'],
+      <String>['key', 'PW: Settings ya PW tab se apne account me login karein'],
+      <String>['graduation', 'PW lecture ka link Download tab me daalein, ya PW tab me dekhein'],
     ];
 
     return AppCard(
@@ -364,7 +462,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SizedBox(width: 11),
               Expanded(
                 child: Text(
-                  'VideoGrab 1.1.0',
+                  'VideoGrab 1.2.0',
                   style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
                 ),
               ),

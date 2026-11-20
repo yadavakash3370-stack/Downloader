@@ -47,6 +47,20 @@ jobs:
           echo "flutter.sdk=$FLUTTER_SDK" > android/local.properties
           echo "sdk.dir=${ANDROID_SDK_ROOT:-$ANDROID_HOME}" >> android/local.properties
 
+      # Dart errors are published as an annotation so a failed build can be
+      # diagnosed from the Checks API. The build steps below decide pass/fail.
+      - name: Static analysis (report only)
+        run: |
+          set +e
+          flutter analyze --no-pub --no-fatal-infos --no-fatal-warnings > analyze.log 2>&1
+          tail -n 30 analyze.log
+          errors="$(grep -E '^[[:space:]]*error •' analyze.log | head -n 30)"
+          if [ -n "$errors" ]; then
+            msg="$(printf '%s' "$errors" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=flutter analyze::${msg}"
+          fi
+          exit 0
+
       # ---------------------------------------------------------------- LITE
       # ~25 MB: no ffmpeg natives (single-file formats, no merging).
       - name: Build LITE APK (arm64)
@@ -55,7 +69,7 @@ jobs:
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=false\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
-          flutter build apk --release --target-platform android-arm64
+          flutter build apk --release --target-platform android-arm64 2>&1 | tee build-lite-arm64.log
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-arm64-v8a.apk
           ls -lh dist
@@ -66,7 +80,7 @@ jobs:
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=false\nvideograb.abi=armeabi-v7a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
-          flutter build apk --release --target-platform android-arm
+          flutter build apk --release --target-platform android-arm 2>&1 | tee build-lite-armv7.log
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-lite-armeabi-v7a.apk
           ls -lh dist
 
@@ -78,9 +92,21 @@ jobs:
           sed -i '/videograb.withFfmpeg/d;/videograb.abi/d' android/gradle.properties
           printf "videograb.withFfmpeg=true\nvideograb.abi=arm64-v8a\n" >> android/gradle.properties
           rm -rf build/app/outputs build/app/intermediates/merged_native_libs
-          flutter build apk --release --target-platform android-arm64
+          flutter build apk --release --target-platform android-arm64 2>&1 | tee build-full-arm64.log
           cp build/app/outputs/flutter-apk/app-release.apk dist/VideoGrab-full-arm64-v8a.apk
           ls -lh dist
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          set +e
+          for f in build-*.log; do
+            [ -f "$f" ] || continue
+            errors="$(grep -E '^e: |^lib/.*[0-9]+:[0-9]+: Error|[Ee]rror:|FAILURE|What went wrong|Unresolved reference|Could not (resolve|find)' "$f" | head -n 40)"
+            [ -n "$errors" ] || errors="$(tail -n 25 "$f")"
+            msg="$(printf '%s' "$errors" | head -c 3800 | sed -e 's/%/%25/g' | sed -e ':a;N;$!ba;s/\n/%0A/g')"
+            echo "::error title=${f}::${msg}"
+          done
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
@@ -108,9 +134,13 @@ jobs:
 
             Install: APK download karein -> "Unknown sources" allow karein -> install.
 
-            Is build me: instant platform detection, behtar quality selectors,
-            parallel/chunked fast downloads (Settings me 1x-16x), professional UI,
-            aur **PW tab** - official pw.live login + lectures app me play/download.
+            Is build me: **PW account login** (app ke andar OTP ya PW website
+            login), PW lecture link ko account se kholna, PW tab me lectures
+            fullscreen player ke saath, instant platform detection, fast
+            downloads (Settings me 1x-16x).
+
+            Note: DRM-protected PW lectures download nahi hote - wo PW tab ke
+            official player me chalte hain.
 
             Pehli launch par engine setup hota hai (10-20s). Extractor tootne par
             Settings -> Update engine.

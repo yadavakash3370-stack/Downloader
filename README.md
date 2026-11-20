@@ -19,9 +19,13 @@ koi server, koi watermark nahi.
   `Max` (site ka sabse bada format, AV1/VP9 bhi) aur 144p–4K chips. Lite build me progressive formats.
 - **Faster downloads** — parallel fragments (`-N`), chunked HTTP range requests, 64K buffer,
   shorter timeouts. Settings me 1× / 4× / 8× / 16× Turbo choose karo (default 8×).
-- **PW tab** — `pw.live` official site app ke andar WebView me khulti hai; OTP login wahi hota hai,
-  lectures site ke apne player me chalte hain. Page jo plain media URL load kare use app ke player me
-  play ya Download tab me bhej kar save kiya ja sakta hai (session headers ke saath).
+- **PW account login** — app ke andar mobile number + OTP se apne Physics Wallah account me login
+  (ya PW website par login, app use pehchan leta hai). Login sirf phone me save hota hai.
+- **PW lecture links** — `pw.live/watch/?…` link Download tab me daalein: app use aapke account se
+  kholta hai. YouTube / plain stream wale lectures download hote hain; DRM-protected lectures ke
+  liye "PW player me dekhein" button milta hai.
+- **PW tab** — `pw.live` official site app ke andar: lectures site ke apne player me chalte hain
+  (DRM lectures bhi, phone ke built-in Widevine se), landscape fullscreen ke saath.
 - **In-app player** — downloaded file ya direct stream, seek, speed (0.5x–2x), fullscreen.
 - **Offline library** — history, thumbnail, size, date; play / save copy / delete.
 - **Downloads folder copy** — `Download/VideoGrab/` me bhi save (Settings me toggle).
@@ -35,8 +39,8 @@ koi server, koi watermark nahi.
 | --- | --- |
 | Download | Instant platform badge, link analyze, quality chips, download progress, quick play |
 | Library | Downloaded videos, play, save copy, delete |
-| PW | Official `pw.live` login, batches/lectures, detected media → Play / Download |
-| Settings | Speed control, engine version + update, storage, guide |
+| PW | Official `pw.live` site, account status, lectures fullscreen, detected media → Play / Download |
+| Settings | PW account login/logout, speed control, engine version + update, storage, guide |
 
 ## APK download
 
@@ -78,19 +82,37 @@ audio ek hi file me ho (aksar 360–720p). Zyada resolution chahiye to Full APK 
 Stack: Flutter 3.29.3 · Dart 3 · AGP 8.7.3 · Kotlin 2.1.0 · Gradle 8.12 · Java 17 ·
 minSdk 24 (Android 7.0+) · targetSdk 35.
 
-## PW tab kaise use karein
+## PW (Physics Wallah) kaise use karein
 
-1. **PW** tab kholein — `pw.live/study-v2/batches` load hota hai.
-2. Login button par apna mobile number / OTP daalein (login poori tarah official site par hota hai;
-   app credentials nahi dekhta, nahi save karta).
-3. Batch → lecture kholein; video site ke player me chalta hai.
-4. Neeche **Videos** button par detected media links milte hain:
-   - **Play** → app ke `video_player` me stream
-   - **Download** → Download tab me auto-analyse, session headers ke saath yt-dlp download
-   - **Copy** → link clipboard me
+### 1. Login
 
-> DRM-protected lectures (Widevine/license wale) site ke player me hi chalenge — unka media URL
-> encrypted hota hai, isliye download list me nahi aata. App koi DRM bypass nahi karta.
+- **Settings → PW account login** (ya PW tab ke neeche **Login**): mobile number daalein →
+  OTP (SMS ya WhatsApp) → Login.
+- OTP form kaam na kare to **PW website se login** chunein — PW tab me site par login karte hi
+  app us login ko apne aap pehchan leta hai.
+- Number/OTP sirf PW ke server par jate hain. Login token sirf is phone ke app storage me rehta
+  hai aur sirf PW ke hosts (`pw.live`, `penpencil.co`) ko bheja jata hai. **Logout** se hat jata hai.
+
+### 2. Lecture ka link
+
+PW par lecture kholkar uska link copy karein (`https://www.pw.live/watch/?batchSlug=…&scheduleId=…`)
+aur Download tab me paste karke **Analyze** dabayein. App aapke account se lecture kholta hai:
+
+| Lecture ka type | Kya hota hai |
+| --- | --- |
+| YouTube / Vimeo par hosted | Normal download — quality chuno, Download / Play |
+| Plain (unencrypted) stream | Download / Play |
+| DRM-protected (Widevine) | Download **nahi** hota. "PW player me dekhein" se PW tab me chalta hai |
+
+### 3. PW tab
+
+Official `pw.live` site app ke andar. Lectures site ke player me chalte hain, fullscreen dabane par
+landscape ho jata hai. Neeche bar me account status aur (agar page koi plain media link load kare)
+**Videos** button milta hai.
+
+> **DRM ke baare me:** PW ke zyadatar paid recorded lectures Widevine DRM se encrypted hote hain.
+> Ye app decryption keys nahi nikalta aur DRM bypass nahi karta, isliye aise lectures sirf official
+> player me dekhe ja sakte hain. Offline dekhne ke liye PW ki official app ka download feature use karein.
 
 ## Local build
 
@@ -120,19 +142,21 @@ lib/
     home_screen.dart              instant detect, analyse, quality, downloads
     library_screen.dart           offline library
     player_screen.dart            video_player wrapper
-    settings_screen.dart          speed, engine, storage
-    study_screen.dart             PW WebView + media detection
+    settings_screen.dart          PW account, speed, engine, storage
+    study_screen.dart             PW WebView (player, fullscreen, account link)
+    pw_login_screen.dart          PW OTP login
   services/
     platform_detector.dart        host-based instant detection
     engine.dart                   MethodChannel bridge
-    app_links.dart                PW -> Download hand-off
+    app_links.dart                hand-off between tabs
+    pw_account.dart               PW login (OTP), session, lecture link resolver
     settings_store.dart, library_store.dart
   models/                         MediaInfo, DownloadItem
   widgets/svg_icon.dart           SVG icon + button kit
 android/app/src/main/kotlin/com/videograb/app/
   MainActivity.kt                 channel registration
   DownloadBridge.kt               probe / download / cancel / stream / save / delete
-assets/icons/                     36 hand-written SVG icons (no emoji)
+assets/icons/                     41 hand-written SVG icons (no emoji)
 ```
 
 ### Native bridge API
@@ -152,5 +176,5 @@ Events: `progress` / `stage` / `done` / `failed` / `cancelled`.
 ## Libraries used
 
 - [`youtubedl-android`](https://github.com/yausername/youtubedl-android) `0.18.1` (library + ffmpeg)
-- `webview_flutter`, `flutter_svg`, `video_player`, `shared_preferences`, `path_provider`,
+- `webview_flutter` (+ `webview_flutter_android`), `flutter_svg`, `video_player`, `shared_preferences`, `path_provider`,
   `permission_handler`

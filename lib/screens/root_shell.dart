@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/app_links.dart';
 import '../services/engine.dart';
 import '../services/library_store.dart';
+import '../services/pw_account.dart';
 import '../services/settings_store.dart';
 import '../theme.dart';
 import '../widgets/svg_icon.dart';
@@ -19,7 +20,11 @@ class RootShell extends StatefulWidget {
 }
 
 class _RootShellState extends State<RootShell> {
-  int _index = 0;
+  // Must match the order of [_BottomBar._tabs] and the IndexedStack children.
+  static const int _tabDownload = 0;
+  static const int _tabStudy = 2;
+
+  int _index = _tabDownload;
 
   @override
   void initState() {
@@ -31,13 +36,20 @@ class _RootShellState extends State<RootShell> {
   Future<void> _boot() async {
     await SettingsStore.load();
     await LibraryStore.load();
+    await PwAccount.load();
     await SettingsStore.bootEngine();
     if (mounted) setState(() {});
   }
 
   void _openInDownload(PendingLink link) {
     AppLinks.openInDownloadTab(link);
-    setState(() => _index = 0);
+    setState(() => _index = _tabDownload);
+  }
+
+  /// The PW tab was asked to open a page (lecture player / website login).
+  void _showStudyTab() {
+    if (!mounted || _index == _tabStudy) return;
+    setState(() => _index = _tabStudy);
   }
 
   @override
@@ -54,11 +66,12 @@ class _RootShellState extends State<RootShell> {
               children: <Widget>[
                 const HomeScreen(),
                 const LibraryScreen(),
-                const SettingsScreen(),
                 StudyScreen(
-                  active: _index == 3,
+                  active: _index == _tabStudy,
                   onOpenInDownload: _openInDownload,
+                  onRequestFocus: _showStudyTab,
                 ),
+                const SettingsScreen(),
               ],
             ),
           ),
