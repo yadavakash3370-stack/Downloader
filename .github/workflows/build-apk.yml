@@ -70,6 +70,7 @@ jobs:
         run: |
           set -o pipefail
           flutter test --no-pub --reporter expanded 2>&1 | tee test.log
+          echo "::notice title=unit tests::$(tail -n 1 test.log | cut -c1-200)"
 
       # ---------------------------------------------------------------- LITE
       # ~25 MB: no ffmpeg natives (single-file formats, no merging).
