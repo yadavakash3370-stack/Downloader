@@ -1,7 +1,7 @@
 name: videograb
 description: "VideoGrab - multi-platform video downloader, player and in-app study browser (YouTube, Instagram, Facebook, TikTok, X, Vimeo, Dailymotion, Physics Wallah and 1000+ sites)."
 publish_to: "none"
-version: 1.2.0+3
+version: 1.2.1+4
 
 environment:
   sdk: ">=3.5.0 <4.0.0"

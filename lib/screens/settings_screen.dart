@@ -462,7 +462,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SizedBox(width: 11),
               Expanded(
                 child: Text(
-                  'VideoGrab 1.2.0',
+                  'VideoGrab 1.2.1',
                   style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700),
                 ),
               ),

@@ -160,6 +160,10 @@ jobs:
             fullscreen player ke saath, instant platform detection, fast
             downloads (Settings me 1x-16x).
 
+            Fix (1.2.1): PW website par number wale box par tap karne se
+            "Webpage not available / ERR_UNKNOWN_URL_SCHEME" (Truecaller link)
+            ab nahi aata.
+
             Note: DRM-protected PW lectures download nahi hote - wo PW tab ke
             official player me chalte hain.
 

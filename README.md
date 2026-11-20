@@ -119,6 +119,12 @@ Official `pw.live` site app ke andar. Lectures site ke player me chalte hain, fu
 landscape ho jata hai. Neeche bar me account status milta hai; lecture khula ho to **Download**
 button, aur agar page koi plain media link load kare to **Videos** button.
 
+Site par login karte waqt mobile number wale box par tap karne se PW ki site Truecaller app kholne
+ki koshish karti hai (`truecallersdk://…`). App is link ko rok deta hai (pehle isse "Webpage not
+available — ERR_UNKNOWN_URL_SCHEME" aata tha), site khuli rehti hai aur number + OTP se login ho
+sakta hai. Dusri apps ke links (`intent://`, `upi://`, `tel:` …) bhi page ki tarah load nahi hote.
+Sabse seedha tarika phir bhi neeche ka **Login** button hai (app ka apna OTP form).
+
 > **DRM ke baare me:** PW ke zyadatar paid recorded lectures Widevine DRM se encrypted hote hain.
 > Ye app decryption keys nahi nikalta aur DRM bypass nahi karta, isliye aise lectures sirf official
 > player me dekhe ja sakte hain. Offline dekhne ke liye PW ki official app ka download feature use karein.

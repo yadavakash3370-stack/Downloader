@@ -8,6 +8,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 import '../services/app_links.dart';
 import '../services/pw_account.dart';
+import '../services/web_links.dart';
 import '../theme.dart';
 import '../widgets/svg_icon.dart';
 import 'player_screen.dart';
@@ -207,12 +208,32 @@ class _StudyScreenState extends State<StudyScreen> {
 })();
 ''';
 
+  /// PW's login asks "did the Truecaller app open?" by checking, a moment
+  /// after firing its link, whether the page still has focus. The link was
+  /// stopped, so the answer is "no" - say so for the next few seconds, even
+  /// if the WebView itself happens to be unfocused.
+  static const String _noAppOpenedScript = r'''
+(function () {
+  try {
+    var until = Date.now() + 5000;
+    if (!document.__vgHasFocus) { document.__vgHasFocus = document.hasFocus; }
+    var real = document.__vgHasFocus;
+    document.hasFocus = function () {
+      if (Date.now() < until) { return true; }
+      try { return real.call(document); } catch (e) { return true; }
+    };
+  } catch (e) {}
+})();
+''';
+
   late final WebViewController _controller;
   final List<DetectedMedia> _media = <DetectedMedia>[];
   Map<String, String> _headers = <String, String>{};
 
   Timer? _hookTimer;
   PwSession? _lastSession;
+  DateTime _lastAppLinkNotice = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastErrorRecovery = DateTime.fromMillisecondsSinceEpoch(0);
   bool _loading = true;
   bool _fullscreen = false;
   int _progress = 0;
@@ -232,6 +253,8 @@ class _StudyScreenState extends State<StudyScreen> {
       ..addJavaScriptChannel('VideoGrab', onMessageReceived: _onJsMessage)
       ..setNavigationDelegate(
         NavigationDelegate(
+          onNavigationRequest: _onNavigationRequest,
+          onWebResourceError: _onWebResourceError,
           onProgress: (int progress) {
             if (mounted) setState(() => _progress = progress);
           },
@@ -334,6 +357,71 @@ class _StudyScreenState extends State<StudyScreen> {
       request.grant();
     } else {
       request.deny();
+    }
+  }
+
+  // ----------------------------------------------------------- app links
+
+  /// Only web pages load in the WebView. A link that belongs to another app
+  /// (truecallersdk://, intent://, upi://, tel: ...) is stopped here: loaded
+  /// as a page it would replace the site with "Webpage not available".
+  NavigationDecision _onNavigationRequest(NavigationRequest request) {
+    if (WebLinks.opensInWebView(request.url)) {
+      return NavigationDecision.navigate;
+    }
+    _onAppLinkBlocked(request.url);
+    return NavigationDecision.prevent;
+  }
+
+  void _onAppLinkBlocked(String url) {
+    final bool truecaller = WebLinks.isTruecaller(url);
+    if (truecaller) _tellPageNoAppOpened();
+
+    // A page may fire the same link again and again - one notice is enough.
+    final DateTime now = DateTime.now();
+    if (now.difference(_lastAppLinkNotice) < const Duration(seconds: 8)) return;
+    _lastAppLinkNotice = now;
+
+    if (truecaller) {
+      final bool loggedIn = PwAccount.loggedIn;
+      _snack(
+        'Truecaller login is app me nahi chalta. Mobile number + OTP se '
+        'login karein.',
+        seconds: 5,
+        actionLabel: loggedIn ? null : 'OTP login',
+        onAction: loggedIn ? null : _login,
+      );
+    } else {
+      _snack('Ye link kisi dusri app ka hai — yahan nahi khulta.');
+    }
+  }
+
+  Future<void> _tellPageNoAppOpened() async {
+    try {
+      await _controller.runJavaScript(_noAppOpenedScript);
+    } catch (_) {
+      // page is navigating - nothing to tell
+    }
+  }
+
+  /// Safety net: if an app link still reached the WebView, leave the error
+  /// page instead of stranding the user on it.
+  Future<void> _onWebResourceError(WebResourceError error) async {
+    if (error.errorType != WebResourceErrorType.unsupportedScheme) return;
+    if (error.isForMainFrame == false) return;
+    final DateTime now = DateTime.now();
+    if (now.difference(_lastErrorRecovery) < const Duration(seconds: 5)) return;
+    _lastErrorRecovery = now;
+
+    _onAppLinkBlocked(error.url ?? '');
+    try {
+      if (await _controller.canGoBack()) {
+        await _controller.goBack();
+      } else {
+        await _controller.loadRequest(Uri.parse(PwAccount.webHome));
+      }
+    } catch (_) {
+      // the WebView is busy - the toolbar's home button still works
     }
   }
 
@@ -577,10 +665,21 @@ class _StudyScreenState extends State<StudyScreen> {
     return const <String, String>{'referer': 'https://www.pw.live/'};
   }
 
-  void _snack(String message) {
+  void _snack(
+    String message, {
+    int seconds = 3,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+      SnackBar(
+        content: Text(message),
+        duration: Duration(seconds: seconds),
+        action: actionLabel != null && onAction != null
+            ? SnackBarAction(label: actionLabel, onPressed: onAction)
+            : null,
+      ),
     );
   }
 
