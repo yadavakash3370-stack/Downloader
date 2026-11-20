@@ -10,11 +10,13 @@ import '../services/app_links.dart';
 import '../services/engine.dart';
 import '../services/library_store.dart';
 import '../services/platform_detector.dart';
+import '../services/pw_account.dart';
 import '../services/settings_store.dart';
 import '../theme.dart';
 import '../utils/format.dart';
 import '../widgets/svg_icon.dart';
 import 'player_screen.dart';
+import 'pw_login_screen.dart';
 
 class _ActiveJob {
   _ActiveJob({required this.id, required this.title, required this.thumbnail});
@@ -46,7 +48,20 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _error;
   MediaInfo? _info;
   int _quality = 0;
-  Map<String, String> _headers = const <String, String>{};
+
+  // Session headers handed over by the PW tab belong to exactly one link.
+  String _handoffUrl = '';
+  Map<String, String> _handoffHeaders = const <String, String>{};
+
+  // Headers that go with the analysed result in [_info].
+  Map<String, String> _infoHeaders = const <String, String>{};
+
+  // PW link state.
+  PwLecture? _pwBlocked;
+  bool _pwNeedsLogin = false;
+  String _pwFallbackUrl = '';
+  String _errorDetail = '';
+  String _stage = '';
 
   static const List<PlatformInfo> _platforms = <PlatformInfo>[
     PlatformDetector.youtube,
@@ -86,10 +101,15 @@ class _HomeScreenState extends State<HomeScreen> {
     final PendingLink? link = AppLinks.take();
     if (link == null || !mounted) return;
     _controller.text = link.url;
-    _headers = link.headers;
+    _handoffUrl = link.url.trim();
+    _handoffHeaders = link.headers;
     setState(() {
       _info = null;
       _error = null;
+      _errorDetail = '';
+      _pwBlocked = null;
+      _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
       _quality = 0;
     });
     Future<void>.microtask(_analyze);
@@ -177,11 +197,46 @@ class _HomeScreenState extends State<HomeScreen> {
     }
     final RegExpMatch? match = RegExp(r'https?://[^\s]+').firstMatch(text);
     _controller.text = match?.group(0) ?? text;
-    _headers = const <String, String>{};
+    _resetLinkState();
+  }
+
+  void _resetLinkState() {
+    _handoffUrl = '';
+    _handoffHeaders = const <String, String>{};
+    if (!mounted) return;
     setState(() {
       _info = null;
       _error = null;
+      _errorDetail = '';
+      _pwBlocked = null;
+      _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
     });
+  }
+
+  Future<void> _pwLogin() async {
+    final bool ok = await PwLoginScreen.open(context);
+    if (!ok || !mounted) return;
+    _snack('PW account login ho gaya');
+    if (_detected?.id == 'pw' && !_analyzing) _analyze();
+  }
+
+  void _openInPwPlayer(PwLecture lecture) {
+    // A stream link has no page of its own: just bring the PW tab (where the
+    // lecture is already open) to the front.
+    final bool page = !PwAccount.isMediaLink(lecture.pageUrl);
+    AppLinks.openInStudyTab(page ? lecture.pageUrl : '');
+  }
+
+  String _friendly(String raw) {
+    final String lower = raw.toLowerCase();
+    if (lower.contains('unsupported url')) {
+      return 'Is link par koi video nahi mila. Video wale page ka link dein.';
+    }
+    if (lower.contains('drm')) {
+      return 'Ye video DRM-protected hai — ise download nahi kiya ja sakta.';
+    }
+    return raw;
   }
 
   Future<void> _analyze() async {
@@ -195,29 +250,104 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
     FocusScope.of(context).unfocus();
+
+    final bool pwLink = PlatformDetector.detect(url)?.id == 'pw';
+    // Session headers captured in the PW tab are used only for the exact
+    // stream link they came with.
+    final bool fromBrowser = url == _handoffUrl && PwAccount.isMediaLink(url);
+    Map<String, String> headers =
+        fromBrowser ? _handoffHeaders : const <String, String>{};
+
     setState(() {
       _analyzing = true;
       _error = null;
+      _errorDetail = '';
       _info = null;
+      _pwBlocked = null;
+      _pwNeedsLogin = false;
+      _pwFallbackUrl = '';
       _quality = 0;
+      _stage = pwLink ? 'PW account se lecture khol rahe hain…' : '';
     });
+
+    String target = url;
+    String pwTitle = '';
+    String pwThumbnail = '';
+
+    if (pwLink) {
+      try {
+        final PwLecture lecture = await PwAccount.resolve(url);
+        if (!mounted) return;
+        if (lecture.kind == PwMediaKind.drm) {
+          setState(() {
+            _analyzing = false;
+            _pwBlocked = lecture;
+          });
+          return;
+        }
+        target = lecture.mediaUrl;
+        // The page's own session wins; the lecture adds what is missing.
+        headers = <String, String>{...lecture.headers, ...headers};
+        pwTitle = lecture.title;
+        pwThumbnail = lecture.thumbnail;
+      } on PwException catch (error) {
+        if (!mounted) return;
+        // A stream link from the PW tab can still work with the page's own
+        // session, so only stop here for lecture page links.
+        if (!fromBrowser) {
+          setState(() {
+            _analyzing = false;
+            _error = error.message;
+            _errorDetail = error.detail;
+            _pwNeedsLogin = error.needsLogin;
+            _pwFallbackUrl = !error.needsLogin && PwAccount.isLectureLink(url)
+                ? url
+                : '';
+          });
+          return;
+        }
+      } catch (error) {
+        if (!mounted) return;
+        if (!fromBrowser) {
+          setState(() {
+            _analyzing = false;
+            _error = 'PW lecture nahi khul paya. $error';
+            _pwFallbackUrl = PwAccount.isLectureLink(url) ? url : '';
+          });
+          return;
+        }
+      }
+      if (mounted) setState(() => _stage = '');
+    }
 
     if (!SettingsStore.engineReady.value) {
       await SettingsStore.bootEngine();
     }
 
     final Map<String, dynamic> result =
-        await Engine.probe(url, headers: _headers);
+        await Engine.probe(target, headers: headers);
     if (!mounted) return;
 
     if (result['ok'] == true) {
+      if (pwTitle.isNotEmpty) result['title'] = pwTitle;
+      final Object? thumbnail = result['thumbnail'];
+      if (pwThumbnail.isNotEmpty &&
+          (thumbnail is! String || thumbnail.isEmpty)) {
+        result['thumbnail'] = pwThumbnail;
+      }
       setState(() {
         _info = MediaInfo.fromMap(result);
+        _infoHeaders = headers;
         _analyzing = false;
       });
     } else {
+      final Object? message = result['error'];
       setState(() {
-        _error = (result['error'] ?? 'Video info nahi mil paya') as String;
+        _error = _friendly(
+          message is String && message.isNotEmpty
+              ? message
+              : 'Video info nahi mil paya',
+        );
         _analyzing = false;
       });
     }
@@ -244,7 +374,7 @@ class _HomeScreenState extends State<HomeScreen> {
       alsoSave: SettingsStore.saveCopy.value,
       title: info.title,
       concurrency: SettingsStore.concurrency.value,
-      headers: _headers,
+      headers: _infoHeaders,
     );
 
     if (!mounted) return;
@@ -270,23 +400,40 @@ class _HomeScreenState extends State<HomeScreen> {
     if (info == null) return;
     setState(() => _resolvingStream = true);
     final Map<String, dynamic> result =
-        await Engine.streamUrl(info.url, headers: _headers);
+        await Engine.streamUrl(info.url, headers: _infoHeaders);
     if (!mounted) return;
     setState(() => _resolvingStream = false);
 
     if (result['ok'] == true && result['url'] is String) {
+      final String streamUrl = result['url'] as String;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PlayerScreen(
             title: info.title,
-            networkUrl: result['url'] as String,
+            networkUrl: streamUrl,
             thumbnail: info.thumbnail,
+            headers: _playerHeaders(streamUrl),
           ),
         ),
       );
     } else {
       _snack((result['error'] ?? 'Stream available nahi hai') as String);
     }
+  }
+
+  /// Headers for in-app playback. A login (cookie / token) is only ever sent
+  /// to PW's own hosts; a plain referer may go to the stream's CDN.
+  Map<String, String> _playerHeaders(String streamUrl) {
+    if (_infoHeaders.isEmpty) return const <String, String>{};
+    final Uri? uri = Uri.tryParse(streamUrl);
+    final bool pwHost = uri != null && PwAccount.isPwHost(uri.host);
+    final Map<String, String> out = <String, String>{};
+    _infoHeaders.forEach((String key, String value) {
+      final String lower = key.toLowerCase();
+      final bool secret = lower == 'authorization' || lower == 'cookie';
+      if (!secret || pwHost) out[key] = value;
+    });
+    return out;
   }
 
   void _snack(String message) {
@@ -308,7 +455,28 @@ class _HomeScreenState extends State<HomeScreen> {
         _urlCard(),
         if (_error != null) ...<Widget>[
           const SizedBox(height: 12),
-          _errorCard(_error!),
+          if (_pwNeedsLogin)
+            _errorCard(
+              _error!,
+              detail: _errorDetail,
+              actionLabel: 'PW account login',
+              actionIcon: 'key',
+              onAction: _pwLogin,
+            )
+          else if (_pwFallbackUrl.isNotEmpty)
+            _errorCard(
+              _error!,
+              detail: _errorDetail,
+              actionLabel: 'PW tab me kholein',
+              actionIcon: 'play',
+              onAction: () => AppLinks.openInStudyTab(_pwFallbackUrl),
+            )
+          else
+            _errorCard(_error!, detail: _errorDetail),
+        ],
+        if (_pwBlocked != null) ...<Widget>[
+          const SizedBox(height: 12),
+          _pwBlockedCard(_pwBlocked!),
         ],
         if (_analyzing) ...<Widget>[
           const SizedBox(height: 12),
@@ -417,11 +585,7 @@ class _HomeScreenState extends State<HomeScreen> {
               if (_controller.text.isNotEmpty)
                 _miniButton('close', () {
                   _controller.clear();
-                  _headers = const <String, String>{};
-                  setState(() {
-                    _info = null;
-                    _error = null;
-                  });
+                  _resetLinkState();
                 }),
               const SizedBox(width: 6),
               _miniButton('paste', _paste, accent: AppColors.secondary),
@@ -448,6 +612,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
             ),
+            if (platform.id == 'pw') ...<Widget>[
+              const SizedBox(height: 8),
+              _pwAccountRow(),
+            ],
           ],
           const SizedBox(height: 12),
           GradientButton(
@@ -476,7 +644,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _errorCard(String message) {
+  Widget _errorCard(
+    String message, {
+    String detail = '',
+    String? actionLabel,
+    String actionIcon = 'key',
+    VoidCallback? onAction,
+  }) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -484,16 +658,200 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: AppColors.danger.withOpacity(0.32)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
-          const AppIcon('info', size: 17, color: AppColors.danger),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              message,
-              style: const TextStyle(fontSize: 12, height: 1.45, color: AppColors.danger),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const AppIcon('info', size: 17, color: AppColors.danger),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: AppColors.danger,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (detail.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 9),
+            // Which PW requests ran and how they answered. Tap to copy, so a
+            // failure can be reported exactly.
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () async {
+                await Clipboard.setData(
+                  ClipboardData(text: '$message\n[$detail]'),
+                );
+                _snack('Error detail copy ho gaya');
+              },
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(9, 6, 9, 6),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceAlt,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        detail,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 9.6,
+                          height: 1.4,
+                          color: AppColors.muted,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const AppIcon('copy', size: 12, color: AppColors.muted),
+                  ],
+                ),
+              ),
             ),
+          ],
+          if (actionLabel != null && onAction != null) ...<Widget>[
+            const SizedBox(height: 12),
+            GradientButton(
+              label: actionLabel,
+              icon: actionIcon,
+              height: 44,
+              onPressed: onAction,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Shown under a detected PW link: is the account connected?
+  Widget _pwAccountRow() {
+    return ValueListenableBuilder<PwSession?>(
+      valueListenable: PwAccount.session,
+      builder: (BuildContext context, PwSession? account, Widget? child) {
+        final bool connected = account != null;
+        return Container(
+          padding: const EdgeInsets.fromLTRB(10, 7, 7, 7),
+          decoration: BoxDecoration(
+            color: AppColors.surfaceAlt,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: <Widget>[
+              AppIcon(
+                connected ? 'user' : 'lock',
+                size: 13,
+                color: connected ? AppColors.success : AppColors.warning,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  account == null
+                      ? 'PW lecture ke liye account login zaroori hai'
+                      : 'PW account: ${account.displayName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 10.8, color: AppColors.text),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (connected)
+                const AppPill(label: 'Connected', color: AppColors.success)
+              else
+                Material(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: _pwLogin,
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      child: Text(
+                        'Login',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// A DRM lecture: it cannot be saved, but it plays in the official player.
+  Widget _pwBlockedCard(PwLecture lecture) {
+    final String title =
+        lecture.title.isEmpty ? 'PW lecture' : lecture.title;
+    return AppCard(
+      padding: const EdgeInsets.all(14),
+      borderColor: AppColors.warning.withOpacity(0.35),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              const IconBadge('lock', size: 38, iconSize: 18, color: AppColors.warning),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 13.2,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: <Widget>[
+                        const AppPill(
+                          label: 'DRM protected',
+                          color: AppColors.warning,
+                        ),
+                        if (lecture.duration > 0)
+                          AppPill(
+                            label: formatDuration(lecture.duration),
+                            color: AppColors.muted,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Ye lecture PW ke DRM (Widevine) se encrypted hai. Aisi video '
+            'download nahi ho sakti — ye sirf PW ke official player me '
+            'chalti hai. Aap ise isi app ke PW tab me dekh sakte hain.',
+            style: TextStyle(fontSize: 11.2, color: AppColors.muted, height: 1.55),
+          ),
+          const SizedBox(height: 13),
+          GradientButton(
+            label: 'PW player me dekhein',
+            icon: 'play',
+            onPressed: () => _openInPwPlayer(lecture),
           ),
         ],
       ),
@@ -515,9 +873,12 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Text(
-                  'Formats dhoondh rahe hain…',
-                  style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+                Text(
+                  _stage.isEmpty ? 'Formats dhoondh rahe hain…' : _stage,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(

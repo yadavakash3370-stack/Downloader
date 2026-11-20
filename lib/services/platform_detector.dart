@@ -99,7 +99,9 @@ class PlatformDetector {
     if (host == 'x.com' || _has(host, 'twitter.com')) return x;
     if (_has(host, 'vimeo.com')) return vimeo;
     if (_has(host, 'dailymotion.com') || host == 'dai.ly') return dailymotion;
-    if (_has(host, 'pw.live') || _has(host, 'penpencil') || _has(host, 'pwskills.com')) {
+    if (_has(host, 'pw.live') ||
+        _has(host, 'penpencil.co') ||
+        _has(host, 'physicswallah.live')) {
       return pw;
     }
     if (_isDirectMedia(text)) return other;
